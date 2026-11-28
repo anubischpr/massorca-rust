@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use massorca_core_git::{Base, WorktreeAdd};
+use massorca_core_git::{Base, WORKTREES_FOLDER, WorktreeAdd, exclude_worktrees_folder};
 use massorca_core_store::{
     ProjectKind as StoreKind, ProjectRow, StoreError, WorkspaceKind as StoreWorkspaceKind,
     WorkspaceRow, WorkspaceState as StoreWorkspaceState, new_id, now_ms,
@@ -17,6 +17,7 @@ use crate::branch_prefix;
 use crate::error::DomainError;
 use crate::generated_names;
 use crate::names;
+use crate::path_limit;
 use crate::paths;
 use crate::workspaces::Workspaces;
 
@@ -202,6 +203,10 @@ impl Workspaces {
             return Ok(adopted);
         }
         self.ensure_path_free(&target)?;
+        let in_project = in_project_folder(project, &target);
+        if in_project {
+            path_limit::check_worktree_path_length(&target, path_limit::platform_path_limit())?;
+        }
         let mut base = Base {
             name: "HEAD".to_owned(),
             revision: "HEAD".to_owned(),
@@ -279,6 +284,9 @@ impl Workspaces {
                 base: Some(base.revision.as_str()),
             }
         };
+        if in_project {
+            exclude_worktrees_folder(&self.git.common_dir(repo)?)?;
+        }
         self.git.worktree_add(repo, &target, add)?;
 
         let row = WorkspaceRow {
@@ -433,6 +441,12 @@ impl Workspaces {
         }
         leftovers
     }
+}
+
+/// Whether `target` lies in the project's own `.worktrees` folder (decision 0183), whatever layout gave the root.
+fn in_project_folder(project: &ProjectRow, target: &Path) -> bool {
+    let folder = paths::canonical(&Path::new(&project.path).join(WORKTREES_FOLDER));
+    paths::canonical(target).starts_with(folder)
 }
 
 pub(crate) fn invalid(message: &str) -> DomainError {

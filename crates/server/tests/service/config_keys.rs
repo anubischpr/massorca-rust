@@ -87,9 +87,15 @@ async fn the_list_describes_each_kind() {
     assert_eq!(layout.kind.as_deref(), Some("choice"));
     assert_eq!(
         layout.choices.as_deref(),
-        Some(&["nested".to_owned(), "flat".to_owned()][..])
+        Some(
+            &[
+                "nested".to_owned(),
+                "flat".to_owned(),
+                "in_project".to_owned()
+            ][..]
+        )
     );
-    assert_eq!(layout.value, json!("nested"));
+    assert_eq!(layout.value, json!("in_project"));
     stop(running).await;
 }
 

@@ -39,6 +39,7 @@ use massorca_protocol::methods::workspaces::{Workspace, WorkspaceKind, Workspace
 use massorca_protocol::{ErrorBody, codes};
 use serde_json::{Value, json};
 
+use crate::attachments::{self, Attachment};
 use crate::catalog::Catalog;
 use crate::instructions::{self, DELEGATION_INSTRUCTIONS};
 use crate::kind::{KindDecl, PasteMode, PromptMode, StatusMechanism};
@@ -406,6 +407,8 @@ struct PromptRules {
     has_status: bool,
     paste: PasteMode,
     submit: String,
+    /// How the kind names an attached file, `{path}` standing for its path (decision 0172).
+    mention: Option<String>,
 }
 
 impl PromptRules {
@@ -414,6 +417,7 @@ impl PromptRules {
             has_status: decl.status.mechanism != StatusMechanism::None,
             paste: decl.prompt.paste,
             submit: decl.prompt.submit.clone(),
+            mention: decl.prompt.mention.clone(),
         }
     }
 }
@@ -857,7 +861,14 @@ impl Agents {
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
                 .map(Started::Terminal),
             RunStart::Chat(adapter) => self
-                .spawn_chat_run(&session_id, plan, &workspace.id, &workspace.path, adapter)
+                .spawn_chat_run(
+                    &session_id,
+                    plan,
+                    &workspace.id,
+                    &workspace.path,
+                    adapter,
+                    decl.prompt.mention.clone(),
+                )
                 .map(Started::Chat),
         }
         .inspect_err(|_| {
@@ -1199,7 +1210,14 @@ impl Agents {
                 .spawn_run(plan, &workspace.id, &workspace.path, title, size)
                 .map(Started::Terminal),
             Some(adapter) => self
-                .spawn_chat_run(&row.id, plan, &workspace.id, &workspace.path, adapter)
+                .spawn_chat_run(
+                    &row.id,
+                    plan,
+                    &workspace.id,
+                    &workspace.path,
+                    adapter,
+                    decl.prompt.mention.clone(),
+                )
                 .map(Started::Chat),
         }
         .inspect_err(|_| {
@@ -1486,7 +1504,39 @@ impl Agents {
         text: &str,
         force: bool,
     ) -> Result<PromptReceipt, AgentError> {
-        self.send_prompt(selector, text, force, true)
+        self.send_prompt(selector, text, force, true, &[])
+    }
+
+    /// `agent.prompt` with files of the session's workspace (decision 0172). Each file is named in the text: a terminal run
+    /// types a mention for it, and a chat run sends the same mention in its message. The names are checked here, against
+    /// the workspace of the session, and again when a queued prompt is typed.
+    pub fn prompt_with_attachments(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+        attachments: &[String],
+    ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, true, attachments)
+    }
+
+    /// The files a prompt names, resolved inside the workspace `workspace_id` and checked for the kind of run it goes to: a
+    /// terminal run takes no images (decision 0172).
+    pub(crate) fn attachments_in(
+        &self,
+        workspace_id: &str,
+        names: &[String],
+        chat: bool,
+    ) -> Result<Vec<Attachment>, AgentError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let workspace = self.inner.config.workspaces.show_workspace(workspace_id)?;
+        let files = attachments::resolve(Path::new(&workspace.path), names)?;
+        if !chat {
+            attachments::refuse_images(&files, attachments::TERMINAL_IMAGE_REFUSAL)?;
+        }
+        Ok(files)
     }
 
     /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
@@ -1497,10 +1547,11 @@ impl Agents {
         text: &str,
         force: bool,
         lift_queue_pauses: bool,
+        attachments: &[String],
     ) -> Result<PromptReceipt, AgentError> {
         launch::check_prompt(text)?;
         let row = self.resolve(selector)?;
-        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses)?;
+        let receipt = self.type_prompt(&row, text, force, lift_queue_pauses, attachments)?;
         // Only the person's prompts are announced: a system prompt, such as a delegated child's report, is not work.
         if lift_queue_pauses {
             self.announce_prompt(&row.id, text);
@@ -1508,21 +1559,25 @@ impl Agents {
         Ok(receipt)
     }
 
-    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does.
+    /// Types `text` into the session `row` names, a terminal or a chat, as [`Agents::send_prompt`] does, with the
+    /// workspace files `attachments` names.
     fn type_prompt(
         &self,
         row: &AgentSessionRow,
         text: &str,
         force: bool,
         lift_queue_pauses: bool,
+        attachments: &[String],
     ) -> Result<PromptReceipt, AgentError> {
+        let chat = self.run_type_of(&row.id)? == RunType::Chat;
+        let files = self.attachments_in(&row.workspace_id, attachments, chat)?;
         // A chat session takes a stream-json message instead of typing (decision 0101, D7). A chat parent waits for its
         // writing child as a terminal one does (decision 0170).
-        if self.run_type_of(&row.id)? == RunType::Chat {
+        if chat {
             if !force && let Some(child) = self.writing_child(&lock(&self.inner.status), row) {
                 return Err(child_writing(&row.id, &child));
             }
-            return self.chat_prompt(row, text, force, lift_queue_pauses);
+            return self.chat_prompt(row, text, &files, force, lift_queue_pauses);
         }
         // The readiness check and the copy of the input rules happen under the status lock. The write does not: it can
         // wait for the agent to read, and the agent's own hook reports need the lock to return.
@@ -1544,7 +1599,9 @@ impl Agents {
             if let Some(refusal) = input_refusal(run, &session.id, state, force) {
                 return Err(refusal);
             }
-            let bytes = prompt::input_bytes(text, run.prompt.paste, &run.prompt.submit);
+            let typed = attachments::with_mentions(text, run.prompt.mention.as_deref(), &files);
+            launch::check_prompt(&typed)?;
+            let bytes = prompt::input_bytes(&typed, run.prompt.paste, &run.prompt.submit);
             let Some(terminal) = session.terminal_id.clone() else {
                 return Err(not_live(&session.id));
             };
@@ -3309,6 +3366,7 @@ pub(crate) mod tests {
             token: "t".to_owned(),
             rules: HookRules::default(),
             prompt: PromptRules {
+                mention: None,
                 has_status: true,
                 paste: PasteMode::Plain,
                 submit: "\r".to_owned(),
@@ -3358,6 +3416,7 @@ pub(crate) mod tests {
             token: "t".to_owned(),
             rules: HookRules::default(),
             prompt: PromptRules {
+                mention: None,
                 has_status: true,
                 paste: PasteMode::Plain,
                 submit: "\r".to_owned(),
@@ -3404,6 +3463,7 @@ pub(crate) mod tests {
                 token: "t".to_owned(),
                 rules: HookRules::default(),
                 prompt: PromptRules {
+                    mention: None,
                     has_status: true,
                     paste: PasteMode::Plain,
                     submit: "\r".to_owned(),
@@ -3598,6 +3658,7 @@ pub(crate) mod tests {
                 token: "t".to_owned(),
                 rules: HookRules::default(),
                 prompt: PromptRules {
+                    mention: None,
                     has_status: true,
                     paste: PasteMode::Plain,
                     submit: "\r".to_owned(),

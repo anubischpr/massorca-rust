@@ -577,6 +577,10 @@ pub struct PromptDecl {
     /// What submits a typed prompt.
     #[serde(default = "default_submit")]
     pub submit: String,
+    /// How the kind names a file a prompt attaches (decision 0172), with `{path}` for the file's path from the workspace
+    /// root, as `@{path}` names it for Claude. A kind without one gets the plain paths, one to a line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention: Option<String>,
 }
 
 impl Default for PromptDecl {
@@ -587,6 +591,7 @@ impl Default for PromptDecl {
             separator: false,
             paste: PasteMode::Plain,
             submit: default_submit(),
+            mention: None,
         }
     }
 }
@@ -1445,6 +1450,14 @@ impl KindDecl {
         if self.prompt.submit.is_empty() {
             problems.push("prompt.submit must not be empty".to_owned());
         }
+        if self
+            .prompt
+            .mention
+            .as_deref()
+            .is_some_and(|template| !template.contains("{path}"))
+        {
+            problems.push("prompt.mention must contain {path}".to_owned());
+        }
     }
 
     fn status_problems(&self, problems: &mut Vec<String>) {
@@ -2027,6 +2040,28 @@ mod tests {
                 .iter()
                 .any(|problem| problem.contains("prompt.separator")),
             "{separated:?}"
+        );
+    }
+
+    #[test]
+    fn a_mention_template_must_name_the_path() {
+        let without_path = problems_of(|value| {
+            value["prompt"] = serde_json::json!({ "mention": "@file" });
+        });
+        assert!(
+            without_path
+                .iter()
+                .any(|problem| problem.contains("prompt.mention")),
+            "{without_path:?}"
+        );
+        let with_path = problems_of(|value| {
+            value["prompt"] = serde_json::json!({ "mention": "@{path}" });
+        });
+        assert!(
+            !with_path
+                .iter()
+                .any(|problem| problem.contains("prompt.mention")),
+            "{with_path:?}"
         );
     }
 

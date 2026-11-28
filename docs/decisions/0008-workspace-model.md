@@ -26,7 +26,8 @@ lineage) comes later; the model must not block it.
   to projects added after the change. A project keeps the root it was added with,
   and existing workspaces never move. Two flat projects cannot take the same
   workspace name: the second create is refused with `workspace.path_taken`, and
-  no suffix is added.
+  no suffix is added. Amended by decision 0183: a third value, `in_project`, puts a
+  git project's worktrees in `<project>/.worktrees` and is now the default.
 - **Workspace.** `{id, project_id, kind: worktree | folder, path, name,
   branch?, base_ref?, created_branch, state: ready | removing, created_at}`.
   Names are unique within a project.
