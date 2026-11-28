@@ -664,7 +664,11 @@ fn a_reopened_task_is_settled_again_woken_and_told_in_the_room() {
         .expect("read")
         .expect("task");
     assert_eq!(settled.outcome, Some(TaskOutcome::Success));
-    assert_eq!(*wakes.borrow(), vec![tree.parent.id.clone()]);
+    // Both reports try to wake the lead: the first run's is refused, the new run's is taken.
+    assert_eq!(
+        *wakes.borrow(),
+        vec![tree.parent.id.clone(), tree.parent.id.clone()]
+    );
     assert_eq!(
         room_lines(&tree),
         vec![
