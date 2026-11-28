@@ -7,19 +7,22 @@ use std::rc::Rc;
 
 use gpui::{Context, Entity, Subscription, Window};
 use massorca_protocol::methods::git::ChangeKind;
-use massorca_protocol::methods::git::diff::{DiffTarget, GitDiffFile, GitDiffFileParams};
+use massorca_protocol::methods::git::diff::{
+    DiffTarget, GitDiffFile, GitDiffFileParams, GitFileContent, GitFileContentParams,
+};
 use massorca_protocol::methods::git::index::GitPathsParams;
 use massorca_ui::components::diff_view::{DiffModel, DiffStatus};
 use massorca_ui::components::text_field::TextField;
 
 use super::Shell;
+use crate::model::image_preview::{ImagePreview, ImageSide, sides};
 use crate::model::regions::Region;
 use crate::model::source_control_diff::{diff_status, file_status, parse_patch};
 use crate::model::source_control_flow::{
     Answer, CommitForm, DiscardFlow, DiscardStage, DiscardTarget,
 };
 use crate::model::source_control_sync::SyncNote;
-use crate::service::Refusal;
+use crate::service::{Refusal, ServiceHandle};
 
 /// The Project sidebar's tabs in their fixed order (ProjectSidebarTabs.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +106,8 @@ pub(super) struct SourceControl {
     /// The file whose diff the Canvas shows, and the diff it is showing.
     pub open: Option<OpenFile>,
     pub diff: Option<DiffLoad>,
+    /// The before and after images of the open file, while it is an image file (GIT-06).
+    pub images: Option<ImagePreview>,
     /// Counts diff requests, so an answer for a file that is no longer open is dropped.
     diff_request: u64,
     /// The discard dialog's flow, while the dialog is open.
@@ -126,6 +131,7 @@ impl SourceControl {
             notice: None,
             open: None,
             diff: None,
+            images: None,
             diff_request: 0,
             discard: None,
             next_id: 0,
@@ -170,6 +176,7 @@ impl Shell {
             self.source_control.clear_field = true;
             self.source_control.open = None;
             self.source_control.diff = None;
+            self.source_control.images = None;
             self.cancel_discard();
             self.source_control.diff_request += 1;
         }
@@ -310,6 +317,19 @@ impl Shell {
         self.source_control.diff_request += 1;
         let request = self.source_control.diff_request;
         self.source_control.diff = Some(DiffLoad::Loading);
+        self.source_control.images = ImagePreview::loading(&file.path);
+        if self.source_control.images.is_some() {
+            let (base, new) = sides(&file.target);
+            for (side, before) in [(base, true), (new, false)] {
+                let params = GitFileContentParams {
+                    workspace: workspace.clone(),
+                    side,
+                    path: file.path.clone(),
+                    max_bytes: None,
+                };
+                self.read_image_side(handle.clone(), params, request, before, cx);
+            }
+        }
         let params = GitDiffFileParams {
             workspace,
             target: file.target.clone(),
@@ -352,10 +372,57 @@ impl Shell {
         cx.notify();
     }
 
+    /// Reads one side of an image file's diff for its preview (GIT-06). The answer is dropped when the file is no longer
+    /// open, the same as a diff answer.
+    fn read_image_side(
+        &self,
+        handle: ServiceHandle,
+        params: GitFileContentParams,
+        request: u64,
+        before: bool,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let answer = handle.git_file_content(params).await;
+            this.update(cx, |shell, cx| {
+                shell.finish_image_side(request, before, answer, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Records one side's answer in the open file's preview; a side whose read failed is unreadable.
+    fn finish_image_side(
+        &mut self,
+        request: u64,
+        before: bool,
+        answer: Result<GitFileContent, Refusal>,
+        cx: &mut Context<Self>,
+    ) {
+        if request != self.source_control.diff_request {
+            return;
+        }
+        let Some(preview) = self.source_control.images.as_mut() else {
+            return;
+        };
+        let side = match answer {
+            Ok(content) => ImageSide::from_content(&content),
+            Err(_) => ImageSide::Unreadable,
+        };
+        if before {
+            preview.before = Some(side);
+        } else {
+            preview.after = Some(side);
+        }
+        cx.notify();
+    }
+
     /// Closes the file's diff and drops an answer that is still on its way.
     pub(super) fn close_file(&mut self, cx: &mut Context<Self>) {
         self.source_control.open = None;
         self.source_control.diff = None;
+        self.source_control.images = None;
         self.source_control.diff_request += 1;
         cx.notify();
     }

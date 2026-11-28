@@ -11,6 +11,7 @@ mod close_confirm;
 mod debug_focus;
 mod debug_page;
 mod delegate;
+mod diff_image_preview;
 mod diff_page;
 mod display_settings;
 mod home_start;
@@ -120,6 +121,8 @@ mod debug_focus_tests;
 mod debug_page_tests;
 #[cfg(test)]
 mod delegate_tests;
+#[cfg(test)]
+mod diff_image_preview_tests;
 #[cfg(test)]
 mod display_settings_tests;
 #[cfg(test)]
