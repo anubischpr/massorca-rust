@@ -162,3 +162,83 @@ fn make_link(target: &Path, link: &Path) -> bool {
         std::os::windows::fs::symlink_file(target, link).is_ok()
     }
 }
+
+#[tokio::test]
+async fn a_team_mention_sends_the_request_to_that_teams_todo() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let ids = rooms(&client, &home.path().join("parser")).await;
+
+    let posted = client
+        .team_room_post(&held_post("@team:beta redraw the parser diagram"))
+        .await
+        .expect("team.room_post");
+    let [person, sent] = posted.messages.as_slice() else {
+        panic!("the line and where it went: {posted:?}");
+    };
+    assert_eq!(person.text, "@team:beta redraw the parser diagram");
+    assert_eq!(
+        sent.text,
+        "Sent to team beta, in its Todo: @team:beta redraw the parser diagram"
+    );
+    let task = sent.task.as_ref().expect("the task it made");
+    let beta = client
+        .task_list(&TaskListParams {
+            team: Some("beta".to_owned()),
+            ..TaskListParams::default()
+        })
+        .await
+        .expect("task.list");
+    assert_eq!(beta.tasks.len(), 1);
+    assert_eq!(beta.tasks[0].id, task.id);
+    assert_eq!(beta.tasks[0].bot_id.as_deref(), Some(ids.iris.as_str()));
+    let alpha = client
+        .task_list(&TaskListParams {
+            team: Some("alpha".to_owned()),
+            ..TaskListParams::default()
+        })
+        .await
+        .expect("task.list");
+    assert!(alpha.tasks.is_empty(), "the lead does not take it");
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn project_and_file_mentions_link_the_project_and_give_the_task_the_files() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let client = connect(home.path(), "default").await;
+    let ids = rooms(&client, &home.path().join("parser")).await;
+
+    let posted = client
+        .team_room_post(&held_post(
+            "@mara tidy @file:src/lib.rs in @project:Parser",
+        ))
+        .await
+        .expect("team.room_post");
+    let task = posted.messages[1].task.as_ref().expect("a task");
+    assert_eq!(task.bot_id.as_deref(), Some(ids.mara.as_str()));
+    assert_eq!(task.project_id.as_deref(), Some(ids.parser.as_str()));
+    assert!(
+        task.body
+            .ends_with("Mentioned in the room:\n- file src/lib.rs (in Parser)\n- project Parser"),
+        "{}",
+        task.body
+    );
+
+    let refused = client
+        .team_room_post(&held_post("@mara tidy @file:src/none.rs"))
+        .await
+        .expect_err("an unknown file");
+    assert_eq!(remote_code(&refused), codes::TEAM_ROOM_MENTION_UNKNOWN);
+    let room = client
+        .team_room_list(&TeamRoomListParams {
+            team: "alpha".to_owned(),
+            limit: None,
+        })
+        .await
+        .expect("team.room_list");
+    assert_eq!(room.messages.len(), 2, "a refused line stores nothing");
+    stop(running).await;
+}

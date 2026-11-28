@@ -32,6 +32,7 @@ use crate::permission::Permission;
 use crate::registry::RegistrationHandle;
 
 use super::room_card::{self, card_lines, card_view};
+use super::room_mention::{self, Mentions, Projects};
 use super::room_reply::{self, Conversation};
 use super::room_schedule::{Moment, scheduled_moment};
 use super::routines::{HostZone, add_routine, routine_view};
@@ -69,7 +70,7 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             team_room::ROOM_RESOLVE,
             capabilities::TEAM_ROOM_ROUTING,
             Permission::Read,
-            super::room_mention::resolve_line,
+            room_mention::resolve_line,
         )?,
         methods.register(
             Owner::Core,
@@ -281,6 +282,9 @@ fn person_line(
         .as_deref()
         .map(|id| room_quote::quoted_line(store, team, id))
         .transpose()?;
+    let projects = Projects::of(store, &start.workspaces, team)?;
+    let mentions = room_mention::resolve(store, team, &bots, &projects, &text)?;
+    let notes = mentions.notes();
     if room_reply::is_conversation(asked.ask, quoted.as_ref()) {
         let bot = room_reply::answering_bot(
             &bots,
@@ -294,8 +298,15 @@ fn person_line(
             workspaces: &start.workspaces,
             team,
             bots: &bots,
+            notes: notes.as_deref(),
         };
         return room_reply::converse(&room, bot, text, quoted.as_ref(), changes);
+    }
+    // A team the line names takes it, unless the line also names a bot of this team (AUTO-13).
+    if let Some(other) = mentions.team.as_ref()
+        && mentioned_bot(&bots, &text).is_none()
+    {
+        return room_card::send_to_team(store, team, other, text, notes);
     }
     // A task asked in reply to a bot's line goes to that bot unless the line names another.
     let receiver = room_quote::replied_bot(&bots, quoted.as_ref()).or(to.as_ref());
@@ -315,6 +326,7 @@ fn person_line(
                 reply_to: quoted.map(|line| line.id),
                 text,
                 posted: false,
+                mentions,
             },
             changes,
         ),
@@ -333,12 +345,13 @@ pub(super) struct Room<'a> {
 }
 
 /// A person's request: its text, whether its line is in the room already (a choice card's answer), the line it replies
-/// to, and what its task keeps of that line.
+/// to, what its task keeps of that line, and what its mentions name (AUTO-13).
 pub(super) struct Request {
     pub(super) text: String,
     pub(super) posted: bool,
     pub(super) reply_to: Option<String>,
     pub(super) context: Option<String>,
+    pub(super) mentions: Mentions,
 }
 
 impl Request {
@@ -349,12 +362,17 @@ impl Request {
         line
     }
 
-    /// A task's body: the line, then the quoted line it replies to.
+    /// A task's body: the line, then the quoted line it replies to, then what its mentions name.
     fn body(&self) -> String {
-        match &self.context {
-            Some(context) => format!("{}\n\n{context}", self.text),
-            None => self.text.clone(),
+        let mut body = self.text.clone();
+        for part in [self.context.clone(), self.mentions.notes()]
+            .into_iter()
+            .flatten()
+        {
+            body.push_str("\n\n");
+            body.push_str(&part);
         }
+        body
     }
 }
 
@@ -400,7 +418,7 @@ pub(super) fn deliver(
             title: title.clone(),
             body: Some(request.body()),
             bot: Some(bot.id.clone()),
-            project: None,
+            project: request.mentions.project.as_ref().map(|row| row.id.clone()),
             origin: Some(TaskOrigin::Room),
         },
     )?;
@@ -530,7 +548,7 @@ pub(super) fn addressed_bot<'a>(
 }
 
 /// The bot a line names with `@name` at the start of a word; the longest name wins.
-fn mentioned_bot<'a>(bots: &'a [BotRow], text: &str) -> Option<&'a BotRow> {
+pub(super) fn mentioned_bot<'a>(bots: &'a [BotRow], text: &str) -> Option<&'a BotRow> {
     let lower = text.to_lowercase();
     bots.iter()
         .filter(|bot| {
@@ -908,6 +926,7 @@ mod tests {
             posted: false,
             reply_to: None,
             context: None,
+            mentions: Mentions::default(),
         };
         let lines = schedule_line(&store, &team, &bots, mara, &request, asked)
             .unwrap()
@@ -963,6 +982,7 @@ mod tests {
             posted: false,
             reply_to: None,
             context: None,
+            mentions: Mentions::default(),
         };
         let refused = schedule_line(&store, &team, &bots, &bots[0], &request, asked).unwrap();
         assert_eq!(refused, None, "a moment already past");

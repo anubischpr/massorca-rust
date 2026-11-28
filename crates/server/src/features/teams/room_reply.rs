@@ -46,6 +46,8 @@ pub(super) struct Conversation<'a> {
     pub(super) workspaces: &'a Workspaces,
     pub(super) team: &'a TeamRow,
     pub(super) bots: &'a [BotRow],
+    /// What the line's mentions name (AUTO-13), given to the reply run.
+    pub(super) notes: Option<&'a str>,
 }
 
 /// Stores the person's line as a conversation of `bot` and starts that bot's reply run. A run that does not start, or
@@ -63,6 +65,7 @@ pub(super) fn converse(
         workspaces,
         team,
         bots,
+        notes,
     } = *room;
     let history = store
         .list_team_room(&team.id, Some(HISTORY_LINES))
@@ -72,7 +75,10 @@ pub(super) fn converse(
     question.reply_bot_id = Some(bot.id.clone());
     question.reply_state = Some(OPEN.to_owned());
     insert_row(store, &question)?;
-    let prompt = prompt(team, bot, bots, &history, quoted, &question.text);
+    let mut prompt = prompt(team, bot, bots, &history, quoted, &question.text);
+    if let Some(notes) = notes {
+        prompt.push_str(&format!("\n{notes}\n"));
+    }
     let request = format!("team.room_reply:{}", question.id);
     let mut lines = vec![question.clone()];
     let session = match start_reply_run(
