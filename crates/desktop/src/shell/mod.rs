@@ -34,8 +34,10 @@ mod secret_requests;
 mod service_banner;
 mod session_child_wait;
 mod session_grid;
+mod session_options;
 mod session_rename;
 mod session_view;
+mod setting_rows;
 mod settings;
 mod settings_remove_dialog;
 mod settings_secret_dialog;
@@ -149,7 +151,11 @@ mod session_chat_tests;
 #[cfg(test)]
 mod session_menu_tests;
 #[cfg(test)]
+mod session_options_tests;
+#[cfg(test)]
 mod session_view_tests;
+#[cfg(test)]
+mod setting_rows_tests;
 #[cfg(test)]
 mod settings_git_tests;
 #[cfg(test)]
@@ -265,6 +271,8 @@ pub struct Shell {
     session_calls: HashMap<String, session_view::SessionCall>,
     /// Why the last stop or resume of each session was refused, shown above its composer.
     session_notices: HashMap<String, String>,
+    /// Each session's model chip changes in flight and the notes their answers left (decision 0171).
+    session_live_options: session_options::LiveOptions,
     /// The session row whose title is being edited in place (A97 Rename).
     session_rename: Option<session_rename::SessionRename>,
     /// Chat sessions' transcripts. Only a fixture fills this until the chat arm turns on with `AgentSession.run`.
@@ -400,8 +408,10 @@ pub struct Shell {
     applied_status_items: Vec<crate::model::status_items::StatusItem>,
     /// Follows the operating system's appearance, which the `system` choice shows.
     _appearance_changes: Subscription,
-    /// The projects the Sidebar shows collapsed. Kept for the app run only.
+    /// The projects the Sidebar shows collapsed; saved in the UI state (SET-02).
     collapsed_projects: BTreeSet<String>,
+    /// The last refused write of a live Settings row, as `(key, the service's sentence)` (SET-01).
+    setting_notice: Option<(String, String)>,
 }
 
 impl Shell {
@@ -446,6 +456,11 @@ impl Shell {
     /// Opens the Activity rail mode the last run left (SET-02); called before the first frame.
     pub fn restore_mode(&mut self, mode: crate::model::navigation::Mode) {
         self.model.restore_mode(mode);
+    }
+
+    /// Folds the projects the last run left folded in the Sidebar (SET-02); called before the first frame.
+    pub fn restore_collapsed_projects(&mut self, collapsed: BTreeSet<String>) {
+        self.collapsed_projects = collapsed;
     }
 
     fn with_store(
@@ -544,14 +559,26 @@ impl Shell {
             }
             cx.notify();
         });
-        // Every change is checked for the open regions and rail mode, so the next start opens the same ones.
+        // Every change is checked for the open regions, rail mode and folded projects, so the next start opens the same.
         cx.observe_self(|shell, cx| {
             let open = shell.model.regions().open().to_vec();
             let mode = shell.model.navigation().mode;
+            let collapsed = shell.collapsed_projects.clone();
             ui_state::remember(cx, |state| {
                 state.open_regions = open;
                 state.mode = mode;
+                state.collapsed_projects = collapsed;
             });
+        })
+        .detach();
+        cx.observe_window_activation(window, |shell, window, cx| {
+            if window.is_window_active() {
+                shell.fetch_on_focus(cx);
+            }
+        })
+        .detach();
+        cx.observe_window_bounds(window, |_, window, cx| {
+            ui_state::remember_window(cx, ui_state::WindowLayout::of(window.window_bounds()));
         })
         .detach();
         let rail = RailState::new(snapshot.usage.len(), cx);
@@ -695,6 +722,7 @@ impl Shell {
             session_mode_chips: HashMap::new(),
             session_calls: HashMap::new(),
             session_notices: HashMap::new(),
+            session_live_options: session_options::LiveOptions::default(),
             session_rename: None,
             chat_transcripts: HashMap::new(),
             chat_watched: None,
@@ -772,6 +800,7 @@ impl Shell {
             applied_status_items: crate::model::status_items::StatusItem::ALL.to_vec(),
             _appearance_changes: appearance_changes,
             collapsed_projects: BTreeSet::new(),
+            setting_notice: None,
         }
     }
 
@@ -1036,6 +1065,8 @@ impl Render for Shell {
                 crate::model::git_availability::git_row(state.service_git.as_ref())
             },
             request_notice: self.request_notice.clone(),
+            config: self.store.read(cx).state().config.clone(),
+            setting_notice: self.setting_notice.clone(),
         };
         let pairing = pairing::PairingFrame {
             state: self.pairing.clone(),

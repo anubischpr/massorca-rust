@@ -123,6 +123,7 @@ fn text_rows_draw_in_timeline_order(cx: &mut TestAppContext) {
         TranscriptRow::Turn {
             id: "turn".into(),
             state: TurnState::Running,
+            usage: None,
         },
     ];
     let (_view, _asked, cx) = open(cx, rows, None);
