@@ -11,6 +11,10 @@ use predicates::str::contains;
 fn workspace(sandbox: &Sandbox) -> PathBuf {
     let repo = sandbox.home().join("repo");
     git_repo(&repo);
+    // The service runs `git rebase` without the harness identity, so the repository needs its own.
+    git(&repo, &["config", "user.email", "t@example.invalid"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
     let repo_text = repo.to_string_lossy().into_owned();
     let root_text = sandbox.home().join("ws").to_string_lossy().into_owned();
     sandbox.json_ok(
