@@ -51,8 +51,7 @@ pub(crate) async fn dial(
         .ok_or_else(|| unreachable("the host has no address for ssh to forward to"))?;
     let args = stdio_forward_arguments(&route.ssh_target, &route.ssh_args, forward)
         .map_err(|error| unreachable(&error.to_string()))?;
-    let program = find_system_ssh()
-        .ok_or_else(|| unreachable("OpenSSH (ssh) was not found on this computer"))?;
+    let program = find_system_ssh().map_err(|error| unreachable(&error.to_string()))?;
     let (tunnel, stderr) = SshTunnel::spawn(&program, &args)
         .map_err(|error| unreachable(&format!("ssh did not start: {error}")))?;
     let attempt = tokio::time::timeout(
@@ -192,18 +191,49 @@ impl StderrTail {
     /// What ssh said, or `fallback` when it said nothing in time.
     async fn reason_or(self, fallback: String) -> String {
         let said = match tokio::time::timeout(STDERR_WAIT, self.0).await {
-            Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes)
-                .trim()
-                .replace(['\r', '\n'], " "),
+            Ok(Ok(bytes)) => printable(&bytes),
             _ => String::new(),
         };
         if said.is_empty() { fallback } else { said }
     }
 }
 
+/// ssh's output as one line of printable text, for a message. A remote banner or a ProxyCommand may print terminal
+/// control sequences, so every control character becomes a space; what remains is plain text.
+fn printable(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .map(|c| {
+            if c.is_control() || is_bidi_control(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The bidirectional embeddings, overrides and isolates, which reorder the text a terminal shows.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_ssh_printed_is_quoted_without_control_characters() {
+        let quoted =
+            printable(b"\x1b[31mPermission denied\x07 (publickey).\r\n\x1b]0;title\x07\x08 end\t");
+        assert!(!quoted.chars().any(char::is_control), "{quoted:?}");
+        assert!(quoted.contains("Permission denied"), "{quoted:?}");
+        assert!(quoted.ends_with("end"), "{quoted:?}");
+        assert_eq!(printable("a\u{202E}b".as_bytes()), "a b");
+    }
 
     fn route() -> SshRoute {
         SshRoute {
