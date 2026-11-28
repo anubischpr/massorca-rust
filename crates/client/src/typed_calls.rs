@@ -30,6 +30,7 @@ use massorca_protocol::methods::terminals::{
     TerminalKillParams, TerminalList, TerminalListParams, TerminalRef, TerminalResizeParams,
     TerminalWait, TerminalWaitParams,
 };
+use massorca_protocol::methods::usage::{self, UsageList, UsageParams};
 use massorca_protocol::methods::workspaces::{
     self, Workspace, WorkspaceCheck, WorkspaceCreateParams, WorkspaceCurrentParams, WorkspaceList,
     WorkspaceListParams, WorkspaceRef, WorkspaceRemoveParams, WorkspaceRemoved,
@@ -89,6 +90,27 @@ impl Client {
     /// `host.ports`: the listening sockets of each live terminal's processes, read now on the service's host.
     pub async fn host_ports(&self) -> Result<HostPorts, ClientError> {
         self.call(host::PORTS, &()).await
+    }
+
+    /// `usage.list`: each agent account's cached usage on the service's host, or `collection: off`.
+    pub async fn usage_list(&self, params: &UsageParams) -> Result<UsageList, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::USAGE),
+            capabilities::USAGE,
+            usage::LIST,
+        )?;
+        self.call(usage::LIST, params).await
+    }
+
+    /// `usage.refresh`: reads the selected accounts' usage again (at most once every few seconds), then answers as
+    /// `usage.list`.
+    pub async fn usage_refresh(&self, params: &UsageParams) -> Result<UsageList, ClientError> {
+        require_offered(
+            self.has_capability(capabilities::USAGE),
+            capabilities::USAGE,
+            usage::REFRESH,
+        )?;
+        self.call(usage::REFRESH, params).await
     }
 
     /// `events.subscribe`: the change events the service publishes.

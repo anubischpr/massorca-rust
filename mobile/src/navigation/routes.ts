@@ -7,6 +7,8 @@ export type RootStackParamList = {
   ConfirmPairing: { readonly offer: string };
   ProtocolGate: { readonly host: string };
   Workspaces: { readonly host: string };
+  /** The routines of the host's teams (AUTO-28), reached from the host's Projects screen. */
+  Routines: { readonly host: string };
   /** `workspace` is the workspace the terminal belongs to, for its agent state. */
   Terminal: { readonly host: string; readonly terminal: string; readonly workspace?: string };
   /** One workspace's views: its source control (read only) and its terminals. `noGit` is a plain folder, which has no status. */

@@ -220,4 +220,5 @@ fn capability_names_match_the_contract() {
     assert_eq!(capabilities::EXTENSION_POINTS, "extension-points/1");
     assert_eq!(capabilities::TEAM_ROOM_REPLIES, "team-room/3");
     assert_eq!(capabilities::AUTOMATIONS, "automations/1");
+    assert_eq!(capabilities::USAGE, "usage/1");
 }

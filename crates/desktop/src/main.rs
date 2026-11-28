@@ -95,13 +95,30 @@ fn main() {
             if let Some(source) = &client {
                 close_link_on_quit(cx, source.closer());
             }
-            let window_size = size(px(1440.), px(900.));
-            let bounds = Bounds::centered(None, window_size, cx);
+            let displays: Vec<_> = cx
+                .displays()
+                .iter()
+                .map(|display| display.bounds())
+                .collect();
+            // The place and size the last run left, while a display still shows it; the default otherwise.
+            let window_bounds = saved
+                .window
+                .and_then(|layout| {
+                    layout.restored(
+                        &displays,
+                        (LAYOUT_WINDOW_MIN_WIDTH, LAYOUT_WINDOW_MIN_HEIGHT),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx))
+                });
+            let window_size = window_bounds.get_bounds().size;
             let open_regions = saved.open_regions.clone();
             let rail_mode = saved.mode;
+            let collapsed_projects = saved.collapsed_projects.clone();
             let opened = cx.open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(window_bounds),
                     window_min_size: Some(size(
                         px(LAYOUT_WINDOW_MIN_WIDTH),
                         px(LAYOUT_WINDOW_MIN_HEIGHT),
@@ -130,6 +147,7 @@ fn main() {
                         };
                         shell.restore_open_regions(open_regions);
                         shell.restore_mode(rail_mode);
+                        shell.restore_collapsed_projects(collapsed_projects);
                         if let Some(field) = launch.debug_focus {
                             shell.start_debug_input(field, window, cx);
                         }

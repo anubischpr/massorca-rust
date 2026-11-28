@@ -66,6 +66,21 @@ impl RowDensity {
     }
 }
 
+thread_local! {
+    static DEFAULT_DENSITY: std::cell::Cell<RowDensity> =
+        const { std::cell::Cell::new(RowDensity::Default) };
+}
+
+/// The density a new row takes unless it sets its own: the `appearance.density` setting (SET-01).
+pub fn default_density() -> RowDensity {
+    DEFAULT_DENSITY.with(std::cell::Cell::get)
+}
+
+/// Sets the density new rows take on the calling thread; the next draw uses it.
+pub fn set_default_density(density: RowDensity) {
+    DEFAULT_DENSITY.with(|current| current.set(density));
+}
+
 /// The height of a row with `lines` lines at `density`.
 pub fn row_height(lines: RowLines, density: RowDensity) -> f32 {
     match lines {
@@ -304,7 +319,7 @@ impl ListRow {
             hover_action: None,
             surface: Surface::default(),
             lines: RowLines::default(),
-            density: RowDensity::default(),
+            density: default_density(),
             level: 0,
             indent: 0.0,
             expanded: None,

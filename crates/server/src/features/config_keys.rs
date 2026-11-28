@@ -69,6 +69,12 @@ pub(crate) fn core_settings(conversations_root: String) -> Vec<SettingDecl> {
             "Rename a generated workspace after its first agent prompt, from a title the agent writes.",
         ),
         (
+            "usage.enabled",
+            Bool,
+            json!(false),
+            "Record and show agent usage and limits for this computer and its hosts.",
+        ),
+        (
             "sessions.search",
             Bool,
             json!(true),

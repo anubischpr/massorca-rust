@@ -200,6 +200,7 @@ fn every_cli_command_with_a_service_request_has_a_core_descriptor() {
             "service.status",
             "service.stop",
             "service.tools",
+            "usage",
             "workspace.check",
             "workspace.create",
             "workspace.current",
