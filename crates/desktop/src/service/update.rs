@@ -32,7 +32,8 @@ use super::teams::{TeamIds, TeamRecord, TeamsRead};
 use crate::model::chat_transcript::ChatTranscript;
 
 /// One change the bridge sends to the UI thread.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// No `Eq`: the usage readings hold `f64` percentages, which the protocol types derive only `PartialEq` for.
+#[derive(Clone, Debug, PartialEq)]
 pub enum StoreUpdate {
     Connection(ConnectionState),
     /// Every project and workspace, after a connect or an overflow. Replaces what was held.
@@ -90,6 +91,10 @@ pub enum StoreUpdate {
     GitProjectBranchesOffered(bool),
     /// Whether the service turns a folder project into a git project (`project-init-git/1`), read on each connect.
     ProjectInitGitOffered(bool),
+    /// Whether the service reports usage (`usage/1`), read on each connect.
+    UsageOffered(bool),
+    /// The usage readings the service holds for this computer, read again after a change; replaces what was held.
+    UsageResync(massorca_protocol::methods::usage::UsageList),
     /// Whether the service offers git sync (`git/1`): the Source control panel's Fetch, Pull and Push.
     GitSyncOffered(bool),
     /// Whether the service offers `projects/1`: Remove project and the project's base branch.
@@ -265,7 +270,8 @@ pub struct SecretsState {
 }
 
 /// The projects and workspaces the service reported, and how the link to it stands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// No `Eq`: it holds the usage readings, whose `f64` percentages derive only `PartialEq`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoreState {
     pub connection: ConnectionState,
     pub projects: Vec<Project>,
@@ -350,6 +356,10 @@ pub struct StoreState {
     /// Whether the service turns a folder project into a git project (`project-init-git/1`), so the No Git warning
     /// offers Initialize Git.
     pub project_init_git: bool,
+    /// Whether the service reports usage (`usage/1`); without it the rail says that it needs a newer MassOrca.
+    pub usage_offered: bool,
+    /// The usage this computer's service last reported; `None` until the first read.
+    pub usage: Option<massorca_protocol::methods::usage::UsageList>,
     /// Whether the service offers git sync (`git/1`), so the panel draws Fetch, Pull and Push.
     pub git_sync: bool,
     /// Whether the service offers `projects/1`, so the Project sidebar offers project edits.
@@ -415,6 +425,8 @@ impl Default for StoreState {
             workspace_in_place: false,
             git_project_branches: false,
             project_init_git: false,
+            usage_offered: false,
+            usage: None,
             git_sync: false,
             project_edits: false,
             agent_archive: false,
@@ -537,6 +549,8 @@ impl StoreState {
             StoreUpdate::WorkspaceInPlaceOffered(offered) => self.workspace_in_place = offered,
             StoreUpdate::GitProjectBranchesOffered(offered) => self.git_project_branches = offered,
             StoreUpdate::ProjectInitGitOffered(offered) => self.project_init_git = offered,
+            StoreUpdate::UsageOffered(offered) => self.usage_offered = offered,
+            StoreUpdate::UsageResync(list) => self.usage = Some(list),
             StoreUpdate::GitSyncOffered(offered) => self.git_sync = offered,
             StoreUpdate::ProjectEditsOffered(offered) => self.project_edits = offered,
             StoreUpdate::AgentArchiveOffered(offered) => self.agent_archive = offered,
