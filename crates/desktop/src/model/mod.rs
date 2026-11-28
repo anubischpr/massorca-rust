@@ -17,6 +17,7 @@ pub mod display_settings;
 pub mod git_availability;
 pub mod home_start;
 pub mod hosts;
+pub mod image_preview;
 pub mod live_options;
 pub mod marketplace;
 pub mod mode_presentation;

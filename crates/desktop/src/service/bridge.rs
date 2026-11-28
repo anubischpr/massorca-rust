@@ -104,6 +104,12 @@ pub(crate) enum Command {
         project: String,
         reply: oneshot::Sender<Result<Vec<String>, Refusal>>,
     },
+    /// `git.file_content`: one side of a file, as bytes when they fit the cap (GIT-06 image previews).
+    GitFileContent {
+        params: massorca_protocol::methods::git::diff::GitFileContentParams,
+        reply:
+            oneshot::Sender<Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal>>,
+    },
     /// `project.init_git`: turns a folder project into a git project; the answer is the updated project.
     InitGitProject {
         project: String,
@@ -455,6 +461,15 @@ impl ServiceHandle {
     /// `git.branches` for a project's own checkout, with no workspace (`git-project-branches/1`).
     pub async fn git_project_branches(&self, project: String) -> Result<Vec<String>, Refusal> {
         self.ask(|reply| Command::GitProjectBranches { project, reply })
+            .await
+    }
+
+    /// `git.file_content`: one side of a file, as bytes when they fit the cap (GIT-06 image previews).
+    pub async fn git_file_content(
+        &self,
+        params: massorca_protocol::methods::git::diff::GitFileContentParams,
+    ) -> Result<massorca_protocol::methods::git::diff::GitFileContent, Refusal> {
+        self.ask(|reply| Command::GitFileContent { params, reply })
             .await
     }
 
@@ -1428,6 +1443,15 @@ fn spawn_call(
                 },
                 reply,
             );
+        }
+        Command::GitFileContent { params, reply } => {
+            tokio::spawn(async move {
+                let answer: Result<massorca_protocol::methods::git::diff::GitFileContent, _> =
+                    client
+                        .call(massorca_protocol::methods::git::diff::FILE_CONTENT, &params)
+                        .await;
+                let _ = reply.send(answer.map_err(|error| Refusal::from(&error)));
+            });
         }
         Command::InitGitProject { project, reply } => {
             tokio::spawn(async move {
