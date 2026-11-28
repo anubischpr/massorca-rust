@@ -128,3 +128,5 @@ pub const CALENDAR: &str = "calendar/1";
 /// Automation runs (`automation.run_now`, `automation.runs` and the `automation.changed` topic, decision 0125). A host
 /// that has it also keeps `automations/1`.
 pub const AUTOMATION_RUNS: &str = "automation-runs/1";
+/// Automation destinations (decision 0127): `destination` on create, update and show, and the refusals of a run.
+pub const AUTOMATION_DESTINATIONS: &str = "automation-destinations/1";

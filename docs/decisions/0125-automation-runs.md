@@ -98,7 +98,7 @@ the timer, the claim and the sweep at start.
 
 - Extra agent arguments and session reuse (AUTO-06): the owner direction asks for plain launch first. They need new
   definition fields and destinations (AUTO-02).
-- The precheck (AUTO-05), destinations and per-run worktrees (AUTO-02), host ownership and fencing (AUTO-08), remote and
-  SSH scheduling (AUTO-09), run terminal retention (AUTO-10).
-- Folding repeated `skipped_unavailable` rows into one row with a count.
+- The precheck (AUTO-05), host ownership and fencing (AUTO-08), remote and SSH scheduling (AUTO-09), run terminal
+  retention (AUTO-10). Destinations, per-run worktrees and folding repeated `skipped_unavailable` rows (AUTO-02) are
+  decision 0127.
 - Token usage (no session reports it) and the plain-text output snapshot beyond the result text.

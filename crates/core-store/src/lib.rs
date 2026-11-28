@@ -41,7 +41,7 @@ pub use agent_sessions::{
     AgentSessionArchive, AgentSessionRow, PREVIEW_SOURCE_CHARS, RunExit, RunExitReason, RunMode,
     SessionDetails, SessionOrigin, StoredActivity,
 };
-pub use automations::AutomationRow;
+pub use automations::{AutomationRow, destination};
 pub use automations_runs::{AutomationRunRow, run_state};
 pub use bots::BotRow;
 pub use devices::DeviceRow;

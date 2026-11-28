@@ -1,5 +1,6 @@
 //! `automation.run_now` and `automation.runs` (decision 0125, AUTO-04). A manual run starts at once and does not move
-//! the schedule; one that cannot start is still written to the history, so the person sees why.
+//! the schedule; one that cannot start, its destination refused (decision 0127), is still written to the history, so the
+//! person sees why.
 
 use massorca_core_store::{now_ms, run_state};
 use massorca_protocol::methods::automations::{
@@ -9,8 +10,9 @@ use massorca_protocol::methods::automations::{
 use massorca_protocol::methods::events::{ChangeEvent, TOPIC_WORKSPACE_CREATED};
 use massorca_protocol::{ErrorBody, codes};
 
+use super::destination::refusal;
 use super::launch::dispatch;
-use super::runs::{TRIGGER_MANUAL, new_run, prune, publish, run_view};
+use super::runs::{TRIGGER_MANUAL, placed_run, prune, publish, run_view};
 use super::selectors::automation;
 use crate::context::RequestCtx;
 use crate::features::teams::{blocking, store_error};
@@ -24,7 +26,7 @@ pub(super) async fn run_now(
     let (run, made) = blocking(&ctx, move |store, agents| {
         let row = automation(store, &params.automation)?;
         let now = now_ms();
-        let mut run = new_run(&row, TRIGGER_MANUAL, now, now);
+        let mut run = placed_run(&row, TRIGGER_MANUAL, now, refusal(&workspaces, &row), now);
         let starts = run.state == run_state::DISPATCHING;
         store
             .insert_automation_run(&mut run, starts.then_some(now))

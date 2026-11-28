@@ -74,6 +74,7 @@ pub enum StoreUpdate {
     AgentNoProjectOffered(bool),
     /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
     AgentImportDetectOffered(bool),
+    AutomationDestinationsOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -323,6 +324,8 @@ pub struct StoreState {
     pub agent_no_project: bool,
     /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
     pub agent_import_detect: bool,
+    /// Whether the service offers automation destinations (`automation-destinations/1`); without it none is sent.
+    pub automation_destinations: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -392,6 +395,7 @@ impl Default for StoreState {
             agent_seen: false,
             agent_no_project: false,
             agent_import_detect: false,
+            automation_destinations: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
@@ -509,6 +513,9 @@ impl StoreState {
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
+            StoreUpdate::AutomationDestinationsOffered(offered) => {
+                self.automation_destinations = offered;
+            }
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,

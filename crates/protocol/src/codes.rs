@@ -406,3 +406,15 @@ pub const AUTOMATION_RUN_INTERRUPTED: &str = "automation.run_interrupted";
 pub const AUTOMATION_RUN_EXITED: &str = "automation.run_exited";
 /// An automation run's agent session is gone, so how it ended cannot be known.
 pub const AUTOMATION_RUN_STRANDED: &str = "automation.run_stranded";
+/// A run did not start because its destination workspace was removed (decision 0127).
+pub const AUTOMATION_DESTINATION_REMOVED: &str = "automation.destination_removed";
+/// A run did not start because its repository is no longer attached to this host: its folder is gone or it is no
+/// longer a git repository (decision 0127).
+pub const AUTOMATION_REPOSITORY_DETACHED: &str = "automation.repository_detached";
+/// A run did not start because its destination folder moved or is missing (decision 0127).
+pub const AUTOMATION_PATH_CHANGED: &str = "automation.path_changed";
+/// An automation's destination cannot be used: a workspace of another project, a worktree per run in a folder
+/// project, or a blank base branch (decision 0127).
+pub const AUTOMATION_DESTINATION_INVALID: &str = "automation.destination_invalid";
+/// A new worktree per run names a base branch that is not a commit of its project's repository (decision 0127).
+pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown";

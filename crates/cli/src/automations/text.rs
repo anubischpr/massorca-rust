@@ -2,8 +2,8 @@
 //! one automation. The next run is shown in UTC, as the other commands show their dates.
 
 use massorca_protocol::methods::automations::{
-    Automation, AutomationCadence, AutomationRun, AutomationRunList, AutomationRunState,
-    AutomationWeekday,
+    Automation, AutomationCadence, AutomationDestination, AutomationDestinationKind, AutomationRun,
+    AutomationRunList, AutomationRunState, AutomationWeekday,
 };
 
 use crate::time_text::utc_minute;
@@ -18,17 +18,18 @@ pub fn automation_line(automation: &Automation, verb: &str) -> String {
     )
 }
 
-/// One row per automation: name, schedule, state and id, tab separated.
+/// One row per automation: name, schedule, state, id and destination, tab separated.
 pub fn automation_table(automations: &[Automation]) -> Vec<String> {
     automations
         .iter()
         .map(|automation| {
             format!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 automation.name,
                 schedule_text(automation),
                 state_text(automation),
-                automation.id
+                automation.id,
+                destination_text(&automation.destination)
             )
         })
         .collect()
@@ -40,12 +41,33 @@ pub fn automation_details(automation: &Automation) -> Vec<String> {
         format!("name: {}", automation.name),
         format!("id: {}", automation.id),
         format!("project: {}", project_text(automation)),
+        format!("destination: {}", destination_text(&automation.destination)),
         format!("agent: {}", automation.agent),
         format!("schedule: {}", schedule_text(automation)),
         format!("state: {}", state_text(automation)),
         format!("grace: {} minutes", automation.grace_minutes),
         format!("prompt: {}", automation.prompt),
     ]
+}
+
+/// Where the runs work: the project's own place, a new worktree per run, or the existing workspace, by name when it
+/// still exists.
+pub fn destination_text(destination: &AutomationDestination) -> String {
+    match destination.kind {
+        AutomationDestinationKind::ProjectDefault => "the project's own place".to_owned(),
+        AutomationDestinationKind::ProjectWorktreePerRun => match &destination.base_branch {
+            Some(branch) => format!("a new worktree per run from {branch}"),
+            None => "a new worktree per run".to_owned(),
+        },
+        AutomationDestinationKind::ExistingWorkspace => {
+            match (&destination.workspace_name, &destination.workspace) {
+                (Some(name), Some(id)) => format!("workspace {name} ({id})"),
+                (None, Some(id)) => format!("workspace {id} (no longer exists)"),
+                _ => "workspace (not set)".to_owned(),
+            }
+        }
+        AutomationDestinationKind::Unknown => "a destination this version does not know".to_owned(),
+    }
 }
 
 fn project_text(automation: &Automation) -> String {
