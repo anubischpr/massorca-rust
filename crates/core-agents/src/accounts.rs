@@ -20,8 +20,8 @@ use massorca_protocol::methods::agents::{
 };
 
 use crate::account_check::{
-    MAX_TEXT_CHARS, Verdict, account_strip_names, normalized_identity, parse_state, run_program,
-    settle, state_name, unknown, verdict,
+    CheckOutcome, MAX_TEXT_CHARS, Verdict, account_strip_names, normalized_identity, outcome,
+    parse_state, run_program, state_name, unknown,
 };
 use crate::credentials::{self, ImportFrom};
 use crate::kind::{KindDecl, valid_id};
@@ -247,7 +247,9 @@ impl Agents {
                 }
                 Err(error) => return Ok(failed_import(error.message)),
             };
-        let verdict = self.check_imported(kind, &account);
+        let checked = self.check_imported(kind, &account);
+        let timed_out = checked.as_ref().is_some_and(CheckOutcome::timed_out);
+        let verdict = checked.map(CheckOutcome::verdict);
         let files = credentials::account_files_present(
             self.profile_dir(),
             self.kind_packages(),
@@ -264,6 +266,8 @@ impl Agents {
                 ));
             }
             outcome => match self.store_outcome(kind, &account, outcome, mark, None, refused) {
+                // A check stopped at its time limit kept the account as `unknown`; a retry decides it later.
+                Kept::New if timed_out => self.schedule_check_retry(kind, &account),
                 Kept::New => {}
                 Kept::Updated(existing) => {
                     let row = self.account_of(kind, &existing)?;
@@ -388,6 +392,7 @@ impl Agents {
             let _gate = credentials::lock_homes();
             self.begin_removal(account)?
         };
+        self.cancel_check_retry(account);
         if row.origin == ORIGIN_SIGN_IN
             && let Ok((decl, program)) = self.runnable_kind(kind)
         {
@@ -482,7 +487,10 @@ impl Agents {
 
     /// Runs the kind's check on an account now, or on the active one when `account` is absent (decision 0059). An account
     /// whose sign-in is open, or being decided, is busy. An account whose sign-in or import is still undecided in the store
-    /// is decided by the check, as a sign-in's end decides it; any other account keeps what its check finds.
+    /// is decided by the check, as a sign-in's end decides it; any other account keeps what its check finds. A check
+    /// stopped at its time limit decides nothing: the account keeps its last known state and the check is retried in the
+    /// background (decision 0059, amended 2026-11-27). This check supersedes a retry already waiting, once it is let in: a
+    /// check refused as busy leaves a running retry, and the verdict it brings, alone.
     pub fn accounts_check(
         &self,
         kind: &str,
@@ -495,34 +503,87 @@ impl Agents {
                 .get_active_agent_account(kind)?
                 .ok_or_else(|| account_not_found(kind, "active"))?,
         };
-        let row = self.account_of(kind, &id)?;
-        if let Some(mark) = self.account_busy().pending.get(&id) {
-            return Err(pending_busy(&id, mark));
+        let (summary, timed_out) = self.check_once(kind, &id, None)?;
+        if timed_out {
+            self.schedule_check_retry(kind, &id);
         }
-        if self.store_pending(&id)? {
-            return self.check_undecided(kind, &id);
-        }
-        let (decl, program) = self.runnable_kind(kind)?;
-        let state = self.check_verdict(&decl, &program, &id, row.identity.as_deref());
-        {
-            let _gate = credentials::lock_homes();
-            self.store().set_agent_account_check(
-                &id,
-                state_name(state.state),
-                state.identity.as_deref(),
-            )?;
-        }
-        if parse_state(&row.state) != state.state {
-            self.notify_account(kind, &id, state.state);
-        }
-        let row = self.account_of(kind, &id)?;
-        self.summary(
-            &row,
-            self.store().get_active_agent_account(kind)?.as_deref(),
-        )
+        Ok(summary)
     }
 
-    /// The verdict of an account's check as a check command reports it: `unknown` when the kind declares no check, and
+    /// One retry of a timed-out check of `account` (decision 0059, amended 2026-11-27), applied as an explicit check applies
+    /// its result. `Ok(true)` when it timed out again. Refused when the retry was superseded or cancelled, or the account
+    /// is gone, busy or being removed.
+    pub(crate) fn check_for_retry(
+        &self,
+        kind: &str,
+        account: &str,
+        generation: u64,
+    ) -> Result<bool, AgentError> {
+        self.check_once(kind, account, Some(generation))
+            .map(|(_, timed_out)| timed_out)
+    }
+
+    /// The body of a check of `id`, explicit or a retry of generation `retry`: its summary afterwards, and whether the check
+    /// timed out. A timeout stores nothing. A retry stores its result only while it is still the retry wanted and the
+    /// account is not being removed. An explicit check cancels a retry only once its busy checks let it in.
+    fn check_once(
+        &self,
+        kind: &str,
+        id: &str,
+        retry: Option<u64>,
+    ) -> Result<(AccountSummary, bool), AgentError> {
+        let row = self.account_of(kind, id)?;
+        if let Some(mark) = self.account_busy().pending.get(id) {
+            return Err(pending_busy(id, mark));
+        }
+        if self.store_pending(id)? {
+            return self.check_undecided(kind, id, retry);
+        }
+        if retry.is_none() {
+            self.cancel_check_retry(id);
+        }
+        let (decl, program) = self.runnable_kind(kind)?;
+        let checked = self.check_verdict(&decl, &program, id, row.identity.as_deref());
+        let timed_out = checked.timed_out();
+        if !timed_out {
+            let state = checked.verdict();
+            let found = {
+                let _gate = credentials::lock_homes();
+                self.retry_still_wanted(id, retry)?;
+                self.store().set_agent_account_check(
+                    id,
+                    state_name(state.state),
+                    state.identity.as_deref(),
+                )?
+            };
+            if found && parse_state(&row.state) != state.state {
+                self.notify_account(kind, id, state.state);
+            }
+        }
+        let row = self.account_of(kind, id)?;
+        let summary = self.summary(
+            &row,
+            self.store().get_active_agent_account(kind)?.as_deref(),
+        )?;
+        Ok((summary, timed_out))
+    }
+
+    /// Refuses a retry that is no longer wanted: superseded or cancelled, or of an account being removed. An explicit check
+    /// (`retry` absent) is always wanted.
+    fn retry_still_wanted(&self, account: &str, retry: Option<u64>) -> Result<(), AgentError> {
+        let Some(generation) = retry else {
+            return Ok(());
+        };
+        if self.account_busy().removing.contains(account) {
+            return Err(busy(account, "being removed"));
+        }
+        if !self.retry_is_current(account, generation) {
+            return Err(busy(account, "checked again"));
+        }
+        Ok(())
+    }
+
+    /// The outcome of an account's check as a check command reports it: `unknown` when the kind declares no check, and
     /// `needs_sign_in` when the check cannot run on the account's home.
     pub(crate) fn check_verdict(
         &self,
@@ -530,36 +591,56 @@ impl Agents {
         program: &Path,
         account: &str,
         recorded: Option<&str>,
-    ) -> Verdict {
+    ) -> CheckOutcome {
         let declares_check = decl
             .accounts
             .as_ref()
             .and_then(|accounts| accounts.check.as_ref())
             .is_some();
         if !declares_check {
-            return unknown();
+            return CheckOutcome::Decided(unknown());
         }
         self.check_account_home(decl, program, account, recorded)
-            .unwrap_or(Verdict {
+            .unwrap_or(CheckOutcome::Decided(Verdict {
                 state: AccountState::NeedsSignIn,
                 identity: None,
-            })
+            }))
     }
 
     /// Checks an account whose sign-in or import is still undecided in the store (decision 0059). The check decides it as a
     /// sign-in's end does: signed in keeps it; a check that cannot tell keeps it as `unknown` while its files exist; anything
-    /// else signs a sign-in out and deletes it (an import is only deleted). The mark is held meanwhile, so no other call
-    /// decides the account too.
-    fn check_undecided(&self, kind: &str, account: &str) -> Result<AccountSummary, AgentError> {
+    /// else signs a sign-in out and deletes it (an import is only deleted). A check stopped at its time limit decides
+    /// nothing, so the account stays undecided (decision 0059, amended 2026-11-27). The mark is held meanwhile, so no other
+    /// call decides the account too.
+    fn check_undecided(
+        &self,
+        kind: &str,
+        account: &str,
+        retry: Option<u64>,
+    ) -> Result<(AccountSummary, bool), AgentError> {
         let mark = self.mark_for_decision(account)?;
         // The row may have been decided between the first look and the mark: then it is an ordinary account again.
         if !self.store_pending(account)? {
             drop(mark);
-            return self.accounts_check(kind, Some(account));
+            return self.check_once(kind, account, retry);
+        }
+        // Let in: a retry running for the account would hold the mark, so only a waiting one is cancelled.
+        if retry.is_none() {
+            self.cancel_check_retry(account);
         }
         let row = self.account_of(kind, account)?;
         let (decl, program) = self.runnable_kind(kind)?;
-        let verdict = self.check_verdict(&decl, &program, account, row.identity.as_deref());
+        let checked = self.check_verdict(&decl, &program, account, row.identity.as_deref());
+        if checked.timed_out() {
+            drop(mark);
+            let active = self.store().get_active_agent_account(kind)?;
+            return Ok((self.summary(&row, active.as_deref())?, true));
+        }
+        if let Err(error) = self.retry_still_wanted(account, retry) {
+            drop(mark);
+            return Err(error);
+        }
+        let verdict = checked.verdict();
         let files = credentials::account_files_present(
             self.profile_dir(),
             self.kind_packages(),
@@ -574,7 +655,7 @@ impl Agents {
         match self.store().get_agent_account(account)? {
             Some(row) if row.kind == kind => {
                 let active = self.store().get_active_agent_account(kind)?;
-                self.summary(&row, active.as_deref())
+                Ok((self.summary(&row, active.as_deref())?, false))
             }
             _ => Err(AgentError::new(
                 codes::AGENT_ACCOUNT_NOT_FOUND,
@@ -1031,7 +1112,10 @@ impl Agents {
                 continue;
             }
             match self.store().delete_agent_account(&row.id) {
-                Ok(_) => removed.push((row.id.clone(), parse_state(&row.state))),
+                Ok(_) => {
+                    self.cancel_check_retry(&row.id);
+                    removed.push((row.id.clone(), parse_state(&row.state)));
+                }
                 Err(error) => {
                     problems.push(named(error.into(), format!("account {} of {kind}", row.id)));
                 }
@@ -1353,20 +1437,21 @@ impl Agents {
 
     /// The check of an import: `None` when the kind declares no check or cannot run one. It records nothing: the import's
     /// decision does.
-    fn check_imported(&self, kind: &str, account: &str) -> Option<Verdict> {
+    fn check_imported(&self, kind: &str, account: &str) -> Option<CheckOutcome> {
         let (decl, program) = self.runnable_kind(kind).ok()?;
         self.check_account_home(&decl, &program, account, None)
     }
 
     /// Runs the kind's check on an account's home and settles the result against the recorded identity. `None` when the
-    /// kind declares no check, or the account has no home. The check runs outside the gate.
+    /// kind declares no check, or the account has no home. The check runs outside the gate; one stopped at its time limit
+    /// is [`CheckOutcome::TimedOut`].
     pub(crate) fn check_account_home(
         &self,
         decl: &KindDecl,
         program: &Path,
         account: &str,
         recorded: Option<&str>,
-    ) -> Option<Verdict> {
+    ) -> Option<CheckOutcome> {
         let check = decl.accounts.as_ref()?.check.as_ref()?;
         let credential_decl = decl.credentials.as_ref()?;
         let home = {
@@ -1386,21 +1471,21 @@ impl Agents {
                 } else {
                     AccountState::Unknown
                 };
-                return Some(Verdict {
+                return Some(CheckOutcome::Decided(Verdict {
                     state,
                     identity: None,
-                });
+                }));
             }
             home
         };
-        let run = run_program(
+        let run = self.run_account_check(
             program,
             &check.args,
             &home,
             &credential_decl.home_env,
             &account_strip_names(decl),
         );
-        Some(settle(verdict(check, run.exit, &run.output), recorded))
+        Some(outcome(check, &run, recorded))
     }
 
     /// Runs the kind's sign-out on an account's home, when declared and the home exists. It runs outside the gate. Its
@@ -1522,7 +1607,7 @@ fn all_missing(error: &AgentError) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::sessions::tests::service;
     use std::sync::{Arc, Mutex};
@@ -1668,7 +1753,7 @@ mod tests {
     }
 
     /// Collects the changes a service announces. It is set before the call under test, since a service takes one listener.
-    fn collect_changes(agents: &Agents) -> Arc<Mutex<Vec<Change>>> {
+    pub(crate) fn collect_changes(agents: &Agents) -> Arc<Mutex<Vec<Change>>> {
         let changes = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&changes);
         agents.set_listener(Box::new(move |change| sink.lock().unwrap().push(change)));
@@ -1676,7 +1761,7 @@ mod tests {
     }
 
     /// The account changes collected so far, in order.
-    fn account_events(changes: &Mutex<Vec<Change>>) -> Vec<AccountsChanged> {
+    pub(crate) fn account_events(changes: &Mutex<Vec<Change>>) -> Vec<AccountsChanged> {
         changes
             .lock()
             .unwrap()
@@ -1704,13 +1789,31 @@ mod tests {
         fs::write(kinds.join("fake.json"), kind.to_string()).expect("write the fake kind");
     }
 
-    /// A check that cannot pass: this test binary, given an option it does not know, exits non-zero.
+    /// A declared check, which [`refuse_checks`] makes refuse every login.
     fn refusing_check() -> serde_json::Value {
         serde_json::json!({ "check": { "args": ["--no-such-option-for-this-check"] } })
     }
 
+    /// Makes every check of the service finish at once with a non-zero exit, as the stand-in for its program. Running a real
+    /// program here would be at the mercy of a loaded machine: a run past the time limit is no verdict, so the account
+    /// would be kept as `unknown` instead of refused (decision 0059, amended 2026-11-27).
+    fn refuse_checks(agents: &Agents) {
+        agents.set_check_settings(crate::check_retry::CheckSettings {
+            runner: Some(Arc::new(|_program: &Path, _args: &[String]| {
+                crate::account_check::CheckRun {
+                    run: crate::account_check::RunOutput {
+                        exit: Some(1),
+                        output: String::new(),
+                    },
+                    timed_out: false,
+                }
+            })),
+            ..Default::default()
+        });
+    }
+
     /// A source directory holding the declared credential file.
-    fn source_with_token() -> tempfile::TempDir {
+    pub(crate) fn source_with_token() -> tempfile::TempDir {
         let source = tempfile::tempdir().expect("a source directory");
         fs::write(source.path().join("token.json"), "{}").expect("write a token");
         source
@@ -1747,6 +1850,7 @@ mod tests {
             program.to_str().expect("a UTF-8 path"),
             Some(refusing_check()),
         );
+        refuse_checks(&agents);
         let changes = collect_changes(&agents);
         let source = source_with_token();
 
@@ -1865,6 +1969,7 @@ mod tests {
             program.to_str().expect("a UTF-8 path"),
             Some(refusing_check()),
         );
+        refuse_checks(&agents);
         let account = account_row(state_name(AccountState::SignedIn), ORIGIN_IMPORT);
         agents.store().insert_agent_account(&account).unwrap();
         let changes = collect_changes(&agents);

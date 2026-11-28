@@ -4,9 +4,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use massorca_protocol::methods::agents::{self as wire, AgentKind, KindCredentials, PackageState};
 
+use crate::check_retry::CheckRunner;
 use crate::credentials;
 use crate::kind::{EffortDecl, KindDecl, ModelDecl, PermissionModeDecl, StatusMechanism};
 use crate::packages::{BuiltInPackages, FIRST_PARTY_PREFIX, KindPackages, PackageKind};
@@ -86,10 +88,32 @@ impl Catalog {
 
     /// Every kind as `agent.kinds` lists it, with programs resolved in `env`.
     pub fn views(&self, profile_dir: &Path, env: &SearchEnv) -> Vec<AgentKind> {
-        self.entries
+        self.views_with(profile_dir, env, crate::probe::PROBE_TIMEOUT, None)
+            .0
+    }
+
+    /// [`Catalog::views`], with version probes of at most `probe_timeout` and `runner` standing in for the programs
+    /// when it is set, and the ids of the kinds whose version probe timed out (decision 0059, amended 2026-11-27).
+    pub(crate) fn views_with(
+        &self,
+        profile_dir: &Path,
+        env: &SearchEnv,
+        probe_timeout: Duration,
+        runner: Option<&CheckRunner>,
+    ) -> (Vec<AgentKind>, Vec<String>) {
+        let mut timed_out = Vec::new();
+        let views = self
+            .entries
             .iter()
-            .map(|entry| view(entry, profile_dir, env))
-            .collect()
+            .map(|entry| {
+                let (kind, probe_timed_out) = view(entry, profile_dir, env, probe_timeout, runner);
+                if probe_timed_out {
+                    timed_out.push(entry.id.clone());
+                }
+                kind
+            })
+            .collect();
+        (views, timed_out)
     }
 }
 
@@ -221,7 +245,14 @@ fn user_package() -> wire::KindPackage {
     }
 }
 
-fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind {
+/// A kind as `agent.kinds` lists it, and whether its version probe timed out.
+fn view(
+    entry: &CatalogEntry,
+    profile_dir: &Path,
+    env: &SearchEnv,
+    probe_timeout: Duration,
+    runner: Option<&CheckRunner>,
+) -> (AgentKind, bool) {
     // The 0056 home counts only as a plain directory, checked under the homes gate (decision 0056, 0059).
     let imported = {
         let _gate = credentials::lock_homes();
@@ -231,7 +262,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
             .is_some()
     };
     let Some(decl) = &entry.decl else {
-        return AgentKind {
+        let kind = AgentKind {
             id: entry.id.clone(),
             name: entry.id.clone(),
             icon: "bot".to_owned(),
@@ -257,6 +288,7 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
                 reason: Some("the kind is not valid, so its fast mode is unknown".to_owned()),
             }),
         };
+        return (kind, false);
     };
     let program_path = if entry.problems.is_empty() {
         resolve_first(&decl.program, env)
@@ -264,8 +296,16 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         None
     };
     // Probed once per installed program (decision 0101, D10).
-    let chat = crate::chat::version::kind_chat(decl, program_path.as_deref());
-    AgentKind {
+    let probed = crate::chat::version::kind_chat_with(
+        decl,
+        program_path.as_deref(),
+        probe_timeout,
+        runner,
+        false,
+    );
+    let timed_out = probed.as_ref().is_some_and(|(_, timed_out)| *timed_out);
+    let chat = probed.map(|(chat, _)| chat);
+    let kind = AgentKind {
         id: entry.id.clone(),
         name: decl.name.clone(),
         icon: decl.icon.clone(),
@@ -287,7 +327,8 @@ fn view(entry: &CatalogEntry, profile_dir: &Path, env: &SearchEnv) -> AgentKind 
         model: decl.model.as_ref().map(model_view),
         effort: decl.effort.as_ref().map(effort_view),
         fast: Some(fast_view(decl)),
-    }
+    };
+    (kind, timed_out)
 }
 
 /// A declared `fast` as `agent.kinds` lists it (decision 0165): supported, or why the kind takes no fast mode.

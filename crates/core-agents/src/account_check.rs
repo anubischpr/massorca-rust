@@ -17,7 +17,8 @@ use crate::launch::RUN_IDENTITY_ENV;
 use crate::process_tree;
 use crate::provided_env::same_name;
 
-/// How long an account check may run before it is stopped; a check that does not finish has state `unknown`.
+/// How long an account check may run before it is stopped. A check stopped there is not a verdict: the account keeps its
+/// last known state and the check is retried in the background (decision 0059, amended 2026-11-27).
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most output of a check that is kept. It is matched, never logged or returned.
 const CHECK_OUTPUT_LIMIT: u64 = 64 * 1024;
@@ -101,6 +102,40 @@ pub fn verdict(check: &CheckDecl, exit: Option<i32>, output: &str) -> Verdict {
         state: AccountState::NeedsSignIn,
         identity: None,
     }
+}
+
+/// What one run of an account check came to (decision 0059, amended 2026-11-27): a verdict, or a run stopped at the time
+/// limit, which is not one. A program that cannot start is a verdict (`unknown`), not a timeout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CheckOutcome {
+    Decided(Verdict),
+    TimedOut,
+}
+
+impl CheckOutcome {
+    /// Whether the run was stopped at the time limit.
+    pub(crate) fn timed_out(&self) -> bool {
+        matches!(self, Self::TimedOut)
+    }
+
+    /// The verdict, where a timeout reads as `unknown`, for a caller that must store or announce a state.
+    pub(crate) fn verdict(self) -> Verdict {
+        match self {
+            Self::Decided(found) => found,
+            Self::TimedOut => unknown(),
+        }
+    }
+}
+
+/// The outcome of a check's run, settled against the identity recorded for the account.
+pub(crate) fn outcome(check: &CheckDecl, run: &CheckRun, recorded: Option<&str>) -> CheckOutcome {
+    if run.timed_out {
+        return CheckOutcome::TimedOut;
+    }
+    CheckOutcome::Decided(settle(
+        verdict(check, run.run.exit, &run.run.output),
+        recorded,
+    ))
 }
 
 /// The state after a check, given the identity recorded for the account. A different identity than the recorded one is a
@@ -189,6 +224,13 @@ pub(crate) struct RunOutput {
     pub(crate) output: String,
 }
 
+/// One run of an account check: what it produced, and whether it was stopped at its time limit.
+#[derive(Clone)]
+pub(crate) struct CheckRun {
+    pub(crate) run: RunOutput,
+    pub(crate) timed_out: bool,
+}
+
 /// How long output is waited for after the program's tree is stopped. A stopped tree closes its pipes, so this bounds
 /// only a pipe something outside the tree still holds.
 const OUTPUT_GRACE: Duration = Duration::from_secs(1);
@@ -271,14 +313,30 @@ pub(crate) fn run_program(
     run_command(&mut command, CHECK_TIMEOUT)
 }
 
+/// Runs an account check as [`run_program`] runs a command, for at most `timeout`, and says whether it was stopped there.
+pub(crate) fn run_check(
+    program: &Path,
+    args: &[String],
+    home: &Path,
+    home_env: &str,
+    strip_env: &[String],
+    timeout: Duration,
+) -> CheckRun {
+    let mut command = account_command(program, args, home, home_env, strip_env);
+    let (run, timed_out) = run_command_timed(&mut command, timeout);
+    CheckRun { run, timed_out }
+}
+
 /// Runs `program` with `args` and the stripped names removed, without any account home, for at most `timeout`: the
-/// support probe of a kind's instruction channel (decision 0161). The output and exit are as [`run_program`]'s.
-pub(crate) fn run_probe(
+/// support probe of a kind's instruction channel (decision 0161) and its version (decision 0101). The output and exit
+/// are as [`run_program`]'s; the flag says the program was stopped at `timeout`, which is no answer yet (decision 0059,
+/// amended 2026-11-27).
+pub(crate) fn run_probe_timed(
     program: &Path,
     args: &[String],
     strip_env: &[String],
     timeout: Duration,
-) -> RunOutput {
+) -> CheckRun {
     let mut command = massorca_process::command(program);
     command
         .args(args)
@@ -288,24 +346,43 @@ pub(crate) fn run_probe(
     for name in strip_env {
         command.env_remove(name);
     }
-    run_command(&mut command, timeout)
+    let (run, timed_out) = run_command_timed(&mut command, timeout);
+    CheckRun { run, timed_out }
 }
 
 /// Runs `command` for at most `timeout`, then stops its whole process tree and collects its output.
 fn run_command(command: &mut Command, timeout: Duration) -> RunOutput {
+    run_command_timed(command, timeout).0
+}
+
+/// [`run_command`], and whether the program was still running at the deadline. One that cannot start was not.
+fn run_command_timed(command: &mut Command, timeout: Duration) -> (RunOutput, bool) {
     let Ok((mut child, mut tree)) = process_tree::spawn(command) else {
-        return RunOutput {
+        let run = RunOutput {
             exit: None,
             output: String::new(),
         };
+        return (run, false);
     };
     let stdout = read_limited(child.stdout.take());
     let stderr = read_limited(child.stderr.take());
-    let exit = wait_with_deadline(&mut child, timeout);
+    let waited = wait_with_deadline(&mut child, timeout);
     tree.stop();
     let mut output = collect(stdout);
     output.push_str(&collect(stderr));
-    RunOutput { exit, output }
+    let (exit, timed_out) = match waited {
+        Waited::Exited(exit) => (exit, false),
+        Waited::TimedOut => (None, true),
+    };
+    (RunOutput { exit, output }, timed_out)
+}
+
+/// How a wait for a program ended.
+enum Waited {
+    /// It exited, with its code when it has one, or its state could not be read.
+    Exited(Option<i32>),
+    /// It was still running at the deadline, and was killed.
+    TimedOut,
 }
 
 /// Reads a stream to its end, or to the output limit, on a thread of its own. The text arrives on the channel once read.
@@ -326,21 +403,22 @@ pub(crate) fn collect(stream: mpsc::Receiver<String>) -> String {
     stream.recv_timeout(OUTPUT_GRACE).unwrap_or_default()
 }
 
-/// The program's exit code, when it exits before the deadline; at the deadline it is killed and has none.
-fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
+/// How the program ended: its exit code, when it exits before the deadline; at the deadline it is killed and timed out.
+fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Waited {
     let started = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.code(),
+        let waited = match child.try_wait() {
+            Ok(Some(status)) => return Waited::Exited(status.code()),
             Ok(None) if started.elapsed() < timeout => {
                 thread::sleep(Duration::from_millis(25));
+                continue;
             }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
+            Ok(None) => Waited::TimedOut,
+            Err(_) => Waited::Exited(None),
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        return waited;
     }
 }
 
@@ -368,6 +446,68 @@ mod tests {
             identity_json: Some(vec!["email".to_owned(), "orgName".to_owned()]),
             signed_in_json: Some("loggedIn".to_owned()),
         }
+    }
+
+    /// Names this test binary's stand-in for a check that never finishes; see [`fake_check_that_hangs`].
+    const HANG_ENV: &str = "MASSORCA_FAKE_CHECK_HANG";
+
+    /// Not a test: the stand-in for a check that never finishes, run by
+    /// `a_check_still_running_at_the_time_limit_is_a_timeout_not_a_verdict`. It hangs only when that test asks for it.
+    #[test]
+    #[ignore = "a stand-in program for a check that hangs"]
+    fn fake_check_that_hangs() {
+        if std::env::var_os(HANG_ENV).is_some() {
+            thread::sleep(Duration::from_secs(120));
+        }
+    }
+
+    #[test]
+    fn a_check_still_running_at_the_time_limit_is_a_timeout_not_a_verdict() {
+        let program = std::env::current_exe().expect("the test binary");
+        let mut command = massorca_process::command(&program);
+        command
+            .args([
+                "--exact",
+                "account_check::tests::fake_check_that_hangs",
+                "--ignored",
+            ])
+            .env(HANG_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let (run, timed_out) = run_command_timed(&mut command, Duration::from_millis(300));
+        assert!(timed_out, "a hanging check is stopped at its time limit");
+        assert_eq!(run.exit, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "it was stopped"
+        );
+        let run = CheckRun { run, timed_out };
+        assert_eq!(
+            outcome(&check(None, None), &run, None),
+            CheckOutcome::TimedOut
+        );
+        assert_eq!(
+            CheckOutcome::TimedOut.verdict().state,
+            AccountState::Unknown
+        );
+    }
+
+    #[test]
+    fn a_check_that_cannot_start_is_a_verdict_not_a_timeout() {
+        let mut command = massorca_process::command("massorca-no-such-check-program");
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (run, timed_out) = run_command_timed(&mut command, Duration::from_secs(5));
+        assert!(!timed_out);
+        let run = CheckRun { run, timed_out };
+        assert_eq!(
+            outcome(&check(None, None), &run, None),
+            CheckOutcome::Decided(unknown())
+        );
     }
 
     #[test]

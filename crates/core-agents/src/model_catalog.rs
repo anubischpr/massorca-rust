@@ -880,7 +880,10 @@ impl Agents {
 
     /// Whether the kind's check reports that `account` needs a sign-in. A kind that declares no check never does.
     fn needs_sign_in(&self, decl: &KindDecl, program: &Path, account: &str) -> bool {
-        self.check_verdict(decl, program, account, None).state == AccountState::NeedsSignIn
+        self.check_verdict(decl, program, account, None)
+            .verdict()
+            .state
+            == AccountState::NeedsSignIn
     }
 }
 

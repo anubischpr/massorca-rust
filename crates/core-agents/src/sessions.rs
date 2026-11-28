@@ -123,8 +123,9 @@ pub enum Change {
     Account(AccountsChanged),
     /// A session's prompt queue changed; the session id (decision 0084). Not a session change, so watchers do not get it.
     Queue(String),
-    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment); the kind id. Announced
-    /// as an account change of the kind, so a client reads the kinds again. Watchers do not get it.
+    /// A kind's models were listed in the background for `agent.kinds` (decision 0166, amendment), or a background retry
+    /// of its version probe decided (decision 0059, amended 2026-11-27); the kind id. Announced as an account change of
+    /// the kind, so a client reads the kinds again. Watchers do not get it.
     Models(String),
     /// A chat session's journal changed (decision 0101). Not a session change, so watchers do not get it; the chat streams
     /// of the session do.
@@ -368,6 +369,23 @@ struct Inner {
     /// How long a sign-in terminal may stay open with no result (decision 0059). Read from the test hook when the service
     /// starts; see [`crate::sign_in::SIGN_IN_TIMEOUT`].
     sign_in_timeout: Duration,
+    /// How account checks run: their time limit and the waits before a timed-out check is retried (decision 0059, amended
+    /// 2026-11-27). Tests change it; see [`crate::check_retry`].
+    check_settings: Mutex<crate::check_retry::CheckSettings>,
+    /// The background retries of timed-out checks, one per account at most. Taken after the homes gate and the account
+    /// busy lock when they are held; nothing else is taken while it is held.
+    check_retries: Mutex<crate::check_retry::CheckRetries>,
+}
+
+/// A handle on the service that does not keep it alive, for a background thread that must end with it.
+#[derive(Clone)]
+pub(crate) struct WeakAgents(Weak<Inner>);
+
+impl WeakAgents {
+    /// The service, while it exists.
+    pub(crate) fn upgrade(&self) -> Option<Agents> {
+        self.0.upgrade().map(|inner| Agents { inner })
+    }
 }
 
 /// A run whose exit the service has not seen yet.
@@ -485,6 +503,8 @@ impl Agents {
                         .ok()
                         .as_deref(),
                 ),
+                check_settings: Mutex::new(crate::check_retry::CheckSettings::default()),
+                check_retries: Mutex::new(crate::check_retry::CheckRetries::default()),
             }),
         };
         let weak = Arc::downgrade(&agents.inner);
@@ -537,6 +557,27 @@ impl Agents {
         self.inner.sign_in_timeout
     }
 
+    /// A handle on the service that does not keep it alive.
+    pub(crate) fn downgrade(&self) -> WeakAgents {
+        WeakAgents(Arc::downgrade(&self.inner))
+    }
+
+    /// How account checks run, as a copy (decision 0059, amended 2026-11-27).
+    pub(crate) fn check_settings(&self) -> crate::check_retry::CheckSettings {
+        lock(&self.inner.check_settings).clone()
+    }
+
+    /// Replaces how account checks run, for a test.
+    #[cfg(test)]
+    pub(crate) fn set_check_settings(&self, settings: crate::check_retry::CheckSettings) {
+        *lock(&self.inner.check_settings) = settings;
+    }
+
+    /// The background check retries, under their lock.
+    pub(crate) fn check_retries(&self) -> MutexGuard<'_, crate::check_retry::CheckRetries> {
+        lock(&self.inner.check_retries)
+    }
+
     /// The accounts a call is working on (sign-ins open, removals running), under the account busy lock.
     pub(crate) fn account_busy(&self) -> MutexGuard<'_, crate::accounts::AccountBusy> {
         lock(&self.inner.accounts)
@@ -569,7 +610,18 @@ impl Agents {
     pub fn kinds(&self) -> AgentKinds {
         let profile_dir = self.profile_dir();
         let catalog = Catalog::load(self.kind_packages(), profile_dir);
-        let mut kinds = catalog.views(profile_dir, &self.program_search());
+        let settings = self.check_settings();
+        let (mut kinds, probes_timed_out) = catalog.views_with(
+            profile_dir,
+            &self.program_search(),
+            settings.probe_timeout,
+            settings.runner.as_ref(),
+        );
+        // A version probe stopped at its time limit is no answer yet: it is retried in the background, and the kind is
+        // announced once a retry decides (decision 0059, amended 2026-11-27).
+        for kind in probes_timed_out {
+            self.schedule_probe_retry(&kind);
+        }
         // A kind is imported when its active account has a usable home (decision 0059).
         for kind in &mut kinds {
             kind.credentials.imported = self.has_usable_account(&kind.id);
@@ -982,6 +1034,8 @@ impl Agents {
         permission_mode: Option<&str>,
         grant: SecretGrant,
     ) -> Result<AgentSession, AgentError> {
+        // No gate is held here, so a chat's pending version probe is waited for first.
+        self.prepare_chat_resume(selector);
         self.resume_at(selector, permission_mode, grant, None, None)
     }
 
@@ -995,8 +1049,9 @@ impl Agents {
         rows: Option<u16>,
     ) -> Result<AgentSession, AgentError> {
         let row = self.resolve(selector)?;
-        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run. Its kind's version probe can take
-        // seconds, so it runs before the start gate is taken; a chat resume needs the same support as a chat start.
+        // A chat session resumes as a chat (decision 0101, D9), never as a terminal run; it needs the same support as a chat
+        // start. A caller may hold a gate, so the support is read from the cache with no wait: the caller waits for a
+        // pending probe before its gates with `prepare_chat_resume`, as `resume` does.
         let chat = self.run_type_of(&row.id)? == RunType::Chat;
         let mut adapter = if chat {
             let (decl, program) = self.resumable_kind(&row)?;
