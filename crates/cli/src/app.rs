@@ -32,6 +32,7 @@ use crate::service::{control, foreground, log_path, unit};
 use crate::skills;
 use crate::target::{Target, reject_host};
 use crate::terminal;
+use crate::usage;
 use crate::workspace;
 
 /// Runs the command line `args` (program name first) and returns its exit code.
@@ -167,6 +168,10 @@ fn dispatch(cli: Cli, output: Output) -> Result<(), CliError> {
         Commands::Host { command } => {
             globals.local_only(host::command_path(&command))?;
             block_on(host::execute(&globals.profile()?, command, output))
+        }
+        Commands::Usage(args) => {
+            let target = globals.target()?;
+            block_on(usage::execute(&target, autostart, args, output))
         }
         Commands::AgentContext => {
             let target = globals.target()?;
