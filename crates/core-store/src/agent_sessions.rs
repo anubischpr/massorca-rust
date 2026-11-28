@@ -611,6 +611,20 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Sets a session's agent ref when it has none, leaving every other field alone (decision 0173: the conversation id a
+    /// chat run names). Returns whether it was set.
+    pub fn set_agent_session_ref_if_unset(
+        &self,
+        id: &str,
+        agent_ref: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self.lock().execute(
+            "UPDATE agent_sessions SET agent_ref = ?2 WHERE id = ?1 AND agent_ref IS NULL",
+            params![id, agent_ref],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Marks a session's current `waiting` or `done` as seen at `at` (inventory STAT-19). With `saw`, only the activity
     /// recorded at that time is marked, so a late mark never lands on a newer one. An activity already seen keeps its first
     /// mark. Returns whether the mark was written.

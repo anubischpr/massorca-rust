@@ -243,6 +243,19 @@ returns `fetched_at_ms` when a listing succeeded, and `error` (`cli_missing`, `n
 - Refusals: a kind that is not enabled is refused with `agent.kind_not_enabled`, as a start refuses it. An account of
   another kind, or an unknown one, is refused with `agent.account_not_found`, and an account with no usable home with
   `agent.credentials_invalid`.
+- Versioned labels (decision 0166, amendment): a declared model whose listed row names the model the vendor resolves
+  it to (Claude's `resolvedModel`) shows a label derived from that id: the family word title-cased, then the version
+  numbers joined by dots, so `claude-opus-5-5` reads as `Opus 5.5`. A trailing eight-digit date and a bracketed variant
+  are dropped. Any other shape, or no resolved id, keeps the declared label. `agent.models` shows it on the declared row,
+  and `agent.kinds` shows it on `model.choices[].label` from the last listing of the kind's active account (or of the
+  usual home when the kind has never had an account). A discovered row keeps the vendor's own label.
+- Background listing (decision 0166, amendment): when a detected, enabled kind that declares `model.discover` has an
+  active account whose listing is missing or stale (the cache would not answer it fresh), `agent.kinds` starts one
+  listing for that account on its own thread and answers at once with the labels it has. A second call while that
+  listing is under way starts none. The listing runs as `agent.models` runs it (account home, time limit, failure
+  rules). An answered listing is announced as `agent.accounts_changed` for the kind, so a client reads `agent.kinds`
+  again and gets the versioned label; a failure is not announced and the label stays declared. The usual home is never
+  listed in the background.
 
 ## Session record (`AgentSession`)
 
@@ -689,7 +702,7 @@ the stream sends an `append` with the byte offset it starts at; a replay sends t
 
 - `agent.chat.start` (CLI: `massorca agent start KIND --chat`) takes the `agent.start` params; `cols`, `rows` and `args`
   are `request.invalid_params`. The kind needs a `chat` block (`{ "adapter", "min_version", "max_major" }`) whose
-  adapter MassOrca speaks (`claude-stream-json`), and its CLI's probed version in range; otherwise
+  adapter MassOrca speaks (`claude-stream-json`, `codex-app-server`), and its CLI's probed version in range; otherwise
   `agent.chat_unsupported`, with the kind's `KindChat` as `data`.
 - `agent.prompt` on a chat session writes the adapter's user message and answers `sent_to_chat`. While a turn runs or a
   request waits it is `agent.busy`; with `force` the message is written anyway and opens its own running turn at once
@@ -748,6 +761,37 @@ A `result` and an interrupt both make the adapter forget the turn's partial mess
 CLI sends (tools, frame types, subtypes) are cut to 128 characters, paths and plan entries to 16 KiB, a plan to 200
 entries.
 
+### The Codex adapter
+
+`chat/codex/` speaks Codex's app-server dialect (decision 0173), written against Codex 0.172.0, pv96's Codex adapter and
+the app-server's public documentation: JSON-RPC without the `jsonrpc` member, one message per line. A run starts
+`app-server` with the launch plan's `-c`, `--enable` and `--disable`; the plan's `-m` and permission flags become the
+thread's `model`, `sandbox`, `approvalPolicy` and `approvalsReviewer`, its `resume <ref>` a `thread/resume`, and the
+terminal's `notify` hook is dropped. The adapter's opening is `initialize`; its answer sends `initialized` and
+`thread/start` or `thread/resume`; the opened thread's id becomes the session's `agent_ref` when it has none
+(`JournalOp::LearnRef`, under the fork rule of a hook report). Prompts sent before the thread is open, or while an
+interrupted turn is still ending, wait in the adapter and go out as `turn/start`; one sent mid-turn is a `turn/start`
+the app-server steers into the running turn.
+
+| Message | Journal |
+|---|---|
+| `agentMessage` item, `item/agentMessage/delta` | `assistant_message`, appended, then replaced by the completed item's text |
+| `reasoning` summary, `item/reasoning/summaryTextDelta` | `thinking` |
+| `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch` | `tool_use` (`shell`, `apply_patch`, `server/tool`, `web_search`); `outputDelta` makes a command `updated`; a completed file change adds a `diff` per file |
+| `turn/plan/updated` | `plan` |
+| `turn/completed` | the turn `completed` (success or failure) or `interrupted`; an interrupted turn's end is skipped |
+| `error` | a warning while `willRetry`, else an error notice (shown once with the failed turn) |
+| `thread/tokenUsage/updated` | the open turn's `usage` (`JournalOp::Usage`) |
+| command or file change approval request | a pending `approval` keyed by the JSON-RPC id, `can_always` with one `acceptForSession` suggestion |
+| `serverRequest/resolved` | a still pending approval `cancelled` |
+| another request | refused, or answered granting nothing, with a notice |
+| another thread's messages, known lifecycle notifications, `codex/event/*` | nothing |
+| an unknown notification or item type | one warning notice per name per run |
+
+An allow answers `{"decision":"accept"}`, an `always` allow `acceptForSession`, a deny `decline`. The interrupt answers
+every pending request `cancel`, then sends `turn/interrupt` of the named turn (or of the turn the app-server names
+next).
+
 ### Version probing
 
 `agent.kinds` fills `AgentKind.chat` for a kind with a `chat` block: the kind's resolved program is run with `--version`
@@ -755,7 +799,7 @@ entries.
 and the result is kept per program path and modified time in the probe cache the instruction probe shares
 (`probe.rs`); a failed probe is run again after 60 s. A chat resume probes before it takes the start gates. `not_detected` when no program resolves, `version_unknown` when the probe fails or prints no version,
 `version_outside_range` below `min_version` or above `max_major`; `range` reads `>=MIN, <MAX+1.0.0`. The built-in
-`claude` kind declares `2.1.258` through `2.x`. A test build probes only the programs
+`claude` kind declares `2.1.258` through `2.x`, the `codex` kind `0.172.0` through `0.x`. A test build probes only the programs
 `MASSORCA_TEST_VERSION_PROBE_ALLOW` lists, so no test runs a vendor CLI it finds on `PATH`.
 
 ## Archive and delete (decision 0163)
@@ -1134,7 +1178,8 @@ label, the identity the check captured, and the state. Ids are canonical lower-c
   left undecided, or refused and deleted); a check that changes the state; an import (kept, or
   refused and deleted); an activation (the account made active, or chosen by a project); a removal
   (the removed account, with the state it had); and a migration or adoption. A refused sign-in or
-  import is announced with the state its check found. An import that creates no account announces
+  import is announced with the state its check found. A background model listing that `agent.kinds` started is
+  announced under this topic too (decision 0166, amendment), and the desktop reads the kinds again on it. An import that creates no account announces
   nothing.
 - **Origin**: `origin` is `sign_in`, `import` or `migrated`, from the row's origin column. A value
   this build does not know, or a summary from a peer that omits the field, reads as `unknown`.

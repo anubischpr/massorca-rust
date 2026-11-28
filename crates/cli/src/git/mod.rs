@@ -6,6 +6,8 @@ mod diff;
 mod index;
 mod log;
 mod remote;
+mod remotes;
+mod show_file;
 mod status;
 mod watch;
 
@@ -35,6 +37,8 @@ pub enum GitCommand {
     Pull(remote::PullArgs),
     /// Pushes the branch to its upstream, creating it on the remote if needed. Never forces.
     Push(remote::PushArgs),
+    /// Lists the hosting provider, owner and repository of each network remote, and a fork's upstream.
+    Remotes(remotes::RemotesArgs),
     /// Aborts the merge, rebase, cherry-pick or revert in progress.
     Abort(WorkspaceArg),
     /// Prints what changes in a workspace (working tree, index, HEAD, refs) until interrupted.
@@ -45,6 +49,8 @@ pub enum GitCommand {
     Log(log::LogArgs),
     /// Shows the patch of one file.
     Patch(diff::PatchArgs),
+    /// Shows one file's bytes on the working tree, the index or a revision; `--out` writes them.
+    ShowFile(show_file::ShowFileArgs),
     /// Lists the local branches, the current one first.
     Branches(branch::BranchesArgs),
     /// Creates a branch with no upstream, at HEAD or `--start`.
@@ -89,11 +95,13 @@ pub async fn execute(
         GitCommand::Fetch(args) => remote::run_fetch(&client, args, output).await,
         GitCommand::Pull(args) => remote::run_pull(&client, args, output).await,
         GitCommand::Push(args) => remote::run_push(&client, args, output).await,
+        GitCommand::Remotes(args) => remotes::run(&client, args, output).await,
         GitCommand::Abort(workspace) => remote::run_abort(&client, workspace, output).await,
         GitCommand::Watch(args) => watch::run(target, &client, args, output).await,
         GitCommand::Diff(args) => diff::run_list(&client, args, output).await,
         GitCommand::Log(args) => log::run(&client, args, output).await,
         GitCommand::Patch(args) => diff::run_patch(&client, args, output).await,
+        GitCommand::ShowFile(args) => show_file::run(&client, args, output).await,
         GitCommand::Branches(args) => branch::run_list(&client, args, output).await,
         GitCommand::BranchCreate(args) => branch::run_create(&client, args, output).await,
         GitCommand::Switch(args) => branch::run_switch(&client, args, output).await,

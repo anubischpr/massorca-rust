@@ -17,9 +17,15 @@ pub fn file_status(kind: ChangeKind) -> FileStatus {
     }
 }
 
-/// What the view shows in place of the diff: a binary change with its sizes, an empty change, or
-/// the diff itself. A patch the service cut is still drawn; the page says so above it.
+/// What the view shows in place of the diff: a submodule's pointer, a binary change with its sizes, an empty change,
+/// or the diff itself. A patch the service cut is still drawn; the page says so above it.
 pub fn diff_status(file: &GitDiffFile) -> DiffStatus {
+    if let Some(pointer) = &file.submodule {
+        return DiffStatus::Submodule {
+            summary: pointer.summary.clone().into(),
+            dirty: pointer.dirty,
+        };
+    }
     if file.binary {
         return DiffStatus::Binary {
             before: size_text(file.old_size).into(),
@@ -208,6 +214,21 @@ index 1111111..2222222 100644
             ..binary
         };
         assert_eq!(diff_status(&unchanged), DiffStatus::Empty);
+    }
+
+    #[test]
+    fn a_submodule_pointer_change_is_drawn_as_its_pointer_and_not_as_an_empty_diff() {
+        let pointer = GitDiffFile {
+            submodule: Some(crate::service::fixtures::base_submodule_pointer()),
+            ..crate::service::fixtures::base_git_diff_file()
+        };
+        assert_eq!(
+            diff_status(&pointer),
+            DiffStatus::Submodule {
+                summary: "Subproject commit 1111111aaaaaaa..2222222bbbbbbb".into(),
+                dirty: Some(false),
+            }
+        );
     }
 
     #[test]

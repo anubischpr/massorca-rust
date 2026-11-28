@@ -41,7 +41,7 @@ impl Workspaces {
         Ok(rows
             .iter()
             .map(|row| {
-                let workspace = views::workspace(row);
+                let workspace = self.view(row);
                 match entries.get(&row.path_key) {
                     Some(entry) => views::with_worktree_state(workspace, entry),
                     None => workspace,

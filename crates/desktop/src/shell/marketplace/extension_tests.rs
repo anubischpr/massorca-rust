@@ -7,7 +7,7 @@ use crate::model::navigation::MarketplacePage;
 use crate::service::fixtures::agent_kind;
 use crate::service::{
     AccountCommand, Command, ExtensionCommand, ExtensionHistory, ExtensionsRead, Refusal,
-    RollbackAnswer, StoreUpdate,
+    RollbackAnswer, ServicesCommand, StoreUpdate,
 };
 use crate::shell::service_tests::{Rig, click, draw, rig};
 use gpui::{TestAppContext, VisualTestContext};
@@ -1254,6 +1254,27 @@ fn restored_package() -> ExtensionInstalled {
     }
 }
 
+/// Opening Installed reads the picked host's skills, placed skills and hosted services; the script takes those reads
+/// before the test's own calls, and answers the services read with an empty list.
+fn take_installed_reads(rig: &mut Rig) {
+    for _ in 0..3 {
+        match rig.script.next() {
+            Some(Command::Skills { .. } | Command::SkillPlacement { .. }) => {}
+            Some(Command::HostedServices {
+                command: ServicesCommand::Status { reply },
+                ..
+            }) => {
+                let _ = reply.send(Ok(
+                    massorca_protocol::methods::hosted_services::ServiceList {
+                        services: Vec::new(),
+                    },
+                ));
+            }
+            _ => panic!("opening Installed reads the skills and the hosted services first"),
+        }
+    }
+}
+
 /// Opens the More menu of the installed package's row, after the service's next read sends `history`.
 fn open_installed_menu(rig: &mut Rig, cx: &mut VisualTestContext, history: ExtensionHistory) {
     rig.updates
@@ -1267,6 +1288,7 @@ fn open_installed_menu(rig: &mut Rig, cx: &mut VisualTestContext, history: Exten
     cx.run_until_parked();
     click(cx, "rail-marketplace");
     click(cx, "marketplace-nav-installed");
+    take_installed_reads(rig);
     click(cx, "button:marketplace-row-1000-more");
 }
 

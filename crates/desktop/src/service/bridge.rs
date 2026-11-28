@@ -34,8 +34,12 @@ use massorca_protocol::methods::events::{
 use massorca_protocol::methods::git::commit::{GitCommitParams, GitCommitted};
 use massorca_protocol::methods::git::diff::{GitDiffFile, GitDiffFileParams};
 use massorca_protocol::methods::git::index::{GitDiscardParams, GitDiscarded, GitPathsParams};
+use massorca_protocol::methods::git::remote::{
+    GitFetchParams, GitFetched, GitPullParams, GitPulled, GitPushParams, GitPushed,
+};
 use massorca_protocol::methods::projects::{
     self, Project, ProjectAddParams, ProjectInspectParams, ProjectInspection, ProjectRef,
+    ProjectRemoveParams, ProjectSetBaseParams,
 };
 use massorca_protocol::methods::tasks::Task;
 use massorca_protocol::methods::teams::{Bot, BotAddParams, Team, TeamCreateParams, TeamProject};
@@ -51,16 +55,19 @@ use super::agent_chat::kind_chats;
 use super::agent_forget::{self, ForgetSessionParams};
 use super::agent_queue::{self, QueueCommand};
 use super::agents;
+use super::automations::{self, AutomationCommand};
+use super::calendar::{self, CalendarCommand};
 use super::chat::{self, ChatCommand, ChatMirrors, ChatWatches};
 use super::connection::{Backoff, ConnectionState, after_failed_attempt, after_loss, backoff};
 use super::extensions::{self, ExtensionCommand};
 use super::git::{self, Freshness, Watches};
 use massorca_core_remote::bootstrap::RemoteMachine;
 
-use super::host_sessions::{self, Followed};
+use super::host_sessions;
 use super::host_terminal::{self, HostAttach};
 use super::hosted_services::{self, ServicesCommand};
 use super::hosts::{self, HostLoss, HostRemoval, SshAdded, SshFailed, SshHost};
+use super::live_hosts::LiveHosts;
 use super::refusal::Refusal;
 use super::secrets::{self, SecretCommand, SecretsFreshness};
 use super::skills;
@@ -109,6 +116,16 @@ pub(crate) enum Command {
         params: ProjectInspectParams,
         reply: oneshot::Sender<Result<ProjectInspection, Refusal>>,
     },
+    /// `project.remove`, answered on its oneshot with the removed project.
+    RemoveProject {
+        params: ProjectRemoveParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
+    /// `project.set_base`, answered on its oneshot with the project as it now stands.
+    SetProjectBase {
+        params: ProjectSetBaseParams,
+        reply: oneshot::Sender<Result<Project, Refusal>>,
+    },
     ListConfig {
         reply: oneshot::Sender<Result<ConfigList, Refusal>>,
     },
@@ -121,7 +138,11 @@ pub(crate) enum Command {
     Routine(RoutineCommand),
     /// A Marketplace extension call, answered on its oneshot.
     Extension(ExtensionCommand),
-    /// A paired host's Marketplace lists, read on the host's own connection; answered as a store update.
+    /// A scheduled automation call (decision 0123), answered on its oneshot.
+    Automation(AutomationCommand),
+    /// A calendar call (decision 0124), answered on its oneshot.
+    Calendar(CalendarCommand),
+    /// A paired host's Marketplace lists, read on the host's live connection; answered as a store update.
     HostRead {
         host: String,
         request: u64,
@@ -137,7 +158,7 @@ pub(crate) enum Command {
         request: u64,
         refresh: bool,
     },
-    /// Discovers a paired host's skills on its own connection; the answer is a store update tagged with `request`.
+    /// Discovers a paired host's skills on its live connection; the answer is a store update tagged with `request`.
     HostSkills {
         host: String,
         request: u64,
@@ -189,17 +210,29 @@ pub(crate) enum Command {
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
-    /// `agent.stop` on a paired host's own connection, answered on its oneshot; never sent to This PC's service.
+    /// `agent.stop` on a paired host's live connection, answered on its oneshot; never sent to This PC's service.
     HostAgentStop {
         host: String,
         session: String,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
-    /// A terminal of a paired host, attached over that host's own connection; its items and writes are the attach's.
+    /// A terminal of a paired host, attached over that host's live connection; its items and writes are the attach's.
     HostTerminalAttach(HostAttach),
     /// `agent.forget` with the `agent-archive/1` options, answered on its oneshot once the service has answered.
     AgentForget {
         params: ForgetSessionParams,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.rename` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentRename {
+        session: String,
+        title: String,
+        reply: oneshot::Sender<Result<AgentSession, Refusal>>,
+    },
+    /// `agent.archive_session` (capability `agent-archive/1`), answered on its oneshot with the session.
+    AgentArchive {
+        session: String,
+        archived: bool,
         reply: oneshot::Sender<Result<AgentSession, Refusal>>,
     },
     /// `agent.resume`, answered on its oneshot with the session once the service has started its new run.
@@ -235,6 +268,18 @@ pub(crate) enum Command {
         params: GitCommitParams,
         reply: oneshot::Sender<Result<GitCommitted, Refusal>>,
     },
+    GitFetch {
+        params: GitFetchParams,
+        reply: oneshot::Sender<Result<GitFetched, Refusal>>,
+    },
+    GitPull {
+        params: GitPullParams,
+        reply: oneshot::Sender<Result<GitPulled, Refusal>>,
+    },
+    GitPush {
+        params: GitPushParams,
+        reply: oneshot::Sender<Result<GitPushed, Refusal>>,
+    },
     /// Follows a workspace's git state until `GitUnwatch`, across reconnects.
     GitWatch {
         workspace: String,
@@ -244,6 +289,10 @@ pub(crate) enum Command {
     },
     /// Re-reads the paired hosts and checks each one. Needs no connection to this computer's service.
     RefreshHosts,
+    /// Tries one paired host again at once, closing its connection first when it has one.
+    ReconnectHost {
+        name: String,
+    },
     /// Installs the service on an SSH host and pairs with it. Needs no connection to this computer's service.
     AddSshHost {
         host: SshHost,
@@ -409,6 +458,18 @@ impl ServiceHandle {
             .unwrap_or_else(|_| Err(Refusal::unavailable(BRIDGE_STOPPED)))
     }
 
+    /// `project.set_base`. A blank base clears it. The project list changes through the resulting event.
+    pub async fn set_project_base(&self, params: ProjectSetBaseParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::SetProjectBase { params, reply })
+            .await
+    }
+
+    /// `project.remove`. The project list changes through the resulting event, not from this answer.
+    pub async fn remove_project(&self, params: ProjectRemoveParams) -> Result<Project, Refusal> {
+        self.ask(|reply| Command::RemoveProject { params, reply })
+            .await
+    }
+
     /// `project.inspect`: whether `path` is a Git repository or a plain folder, before anything is added. Changes nothing.
     pub async fn inspect_project(&self, path: String) -> Result<ProjectInspection, Refusal> {
         self.ask(|reply| Command::InspectProject {
@@ -569,6 +630,7 @@ impl ServiceBridge {
         let (connection_tx, connection) = watch::channel(ConnectionState::Connecting);
         let (closing, _) = watch::channel(false);
         let (finished_tx, finished) = watch::channel(false);
+        let live_hosts = LiveHosts::new(&profile, updates_tx.clone());
         let link = Link {
             profile,
             options,
@@ -585,7 +647,7 @@ impl ServiceBridge {
             secrets_order: Arc::new(SecretsFreshness::default()),
             accounts_order: Arc::new(AccountsFreshness::default()),
             closing: closing.subscribe(),
-            followed: Followed::default(),
+            live_hosts,
         };
         thread::Builder::new()
             .name("massorca-service".to_owned())
@@ -697,17 +759,18 @@ struct Link {
     accounts_order: Arc<AccountsFreshness>,
     /// Turns to `true` when the bridge is closed or dropped; every loop then stops.
     closing: watch::Receiver<bool>,
-    /// The paired hosts a task follows, so the poll leaves them to it (STAT-16).
-    followed: Followed,
+    /// One live link per paired host, kept whatever this computer's service is doing (REM-07).
+    live_hosts: LiveHosts,
 }
 
 impl Link {
     /// Connects, serves while connected, and reconnects with backoff, until stopped.
     async fn supervise(mut self) {
-        hosts::check_hosts_again(
+        hosts::follow_paired(&self.profile, &self.live_hosts, &self.updates);
+        hosts::relist_hosts(
             self.profile.clone(),
+            self.live_hosts.clone(),
             self.updates.clone(),
-            self.followed.clone(),
         );
         let mut backoff = backoff();
         let mut link_was_up = false;
@@ -754,6 +817,7 @@ impl Link {
     fn host_call(&self, command: Command) -> Option<Command> {
         match command {
             Command::RefreshHosts
+            | Command::ReconnectHost { .. }
             | Command::AddSshHost { .. }
             | Command::ProbeSshHost { .. }
             | Command::RemoveHost { .. }
@@ -763,7 +827,7 @@ impl Link {
                     self.profile.clone(),
                     command,
                     self.updates.clone(),
-                    &self.followed,
+                    &self.live_hosts,
                 );
                 None
             }
@@ -772,23 +836,23 @@ impl Link {
                 session,
                 reply,
             } => {
-                host_sessions::spawn_stop(self.profile.clone(), host, session, reply);
+                host_sessions::spawn_stop(self.live_hosts.clone(), host, session, reply);
                 None
             }
             Command::HostTerminalAttach(attach) => {
-                host_terminal::spawn_attach(self.profile.clone(), attach);
+                host_terminal::spawn_attach(self.live_hosts.clone(), attach);
                 None
             }
             Command::HostedServices {
                 host: Some(host),
                 command,
             } => {
-                hosted_services::spawn_host(self.profile.clone(), host, command);
+                hosted_services::spawn_host(self.live_hosts.clone(), host, command);
                 None
             }
             Command::HostRead { host, request } => {
                 extensions::spawn_host_read(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     self.updates.clone(),
@@ -801,7 +865,7 @@ impl Link {
                 command,
             } => {
                 extensions::spawn_host_call(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     command,
@@ -815,7 +879,7 @@ impl Link {
                 refresh,
             } => {
                 skills::spawn_host_read(
-                    self.profile.clone(),
+                    self.live_hosts.clone(),
                     host,
                     request,
                     refresh,
@@ -939,6 +1003,12 @@ impl Link {
         self.emit(StoreUpdate::WorkspaceRenameOffered(client.has_capability(
             massorca_protocol::capabilities::WORKSPACE_RENAME,
         )));
+        self.emit(StoreUpdate::GitSyncOffered(
+            client.has_capability(massorca_protocol::capabilities::GIT),
+        ));
+        self.emit(StoreUpdate::ProjectEditsOffered(
+            client.has_capability(massorca_protocol::capabilities::PROJECTS),
+        ));
         self.emit(StoreUpdate::AgentArchiveOffered(
             client.has_capability(agent_forget::AGENT_ARCHIVE),
         ));
@@ -1038,6 +1108,12 @@ impl Link {
                                     &self.extension_reads,
                                 );
                             }
+                            Some(Command::Automation(command)) => {
+                                automations::spawn_call(client, command);
+                            }
+                            Some(Command::Calendar(command)) => {
+                                calendar::spawn_call(client, command);
+                            }
                             Some(Command::HostedServices { command, .. }) => {
                                 hosted_services::spawn_local(client, command);
                             }
@@ -1124,10 +1200,15 @@ impl Link {
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }
+            // The event names the kind; its whole account list is read again. The kinds are read again too: an account
+            // change moves a kind's `imported` mark, and a background model listing is announced under this topic so a
+            // model choice shows its versioned label (decision 0166, amendment).
             TOPIC_ACCOUNTS_CHANGED => {
-                // The event names the kind; its whole list is read again.
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
-                return Outcome::Continue;
+                agents::list_kinds(client).await.map(|kinds| {
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
+                    StoreUpdate::AgentKindsResync(kinds)
+                })
             }
             // A rename or comment change is read again too: the event names the workspace, not its name.
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
@@ -1262,7 +1343,12 @@ fn spawn_call(
         Command::GitBranches { workspace, reply } => {
             tokio::spawn(async move {
                 let result = client
-                    .git_branches(&massorca_protocol::methods::git::GitWorkspaceRef { workspace })
+                    .git_branches(
+                        &massorca_protocol::methods::git::branch::GitBranchesParams {
+                            workspace: Some(workspace),
+                            project: None,
+                        },
+                    )
                     .await
                     .map(|listed| {
                         listed
@@ -1306,6 +1392,24 @@ fn spawn_call(
             tokio::spawn(async move {
                 let result = client
                     .project_add(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::SetProjectBase { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectSetBaseParams, Project>(projects::SET_BASE, &params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                let _ = reply.send(result);
+            });
+        }
+        Command::RemoveProject { params, reply } => {
+            tokio::spawn(async move {
+                let result = client
+                    .call::<ProjectRemoveParams, Project>(projects::REMOVE, &params)
                     .await
                     .map_err(|error| Refusal::from(&error));
                 let _ = reply.send(result);
@@ -1414,6 +1518,16 @@ fn spawn_call(
         Command::AgentForget { params, reply } => {
             agents::spawn_forget(&client, params, reply, updates);
         }
+        Command::AgentRename {
+            session,
+            title,
+            reply,
+        } => agents::spawn_rename(&client, session, title, reply, updates),
+        Command::AgentArchive {
+            session,
+            archived,
+            reply,
+        } => agents::spawn_archive(&client, session, archived, reply, updates),
         Command::AgentResume { params, reply } => {
             agents::spawn_resume(&client, params, reply, updates);
         }
@@ -1432,6 +1546,8 @@ fn spawn_call(
         Command::Terminal(_)
         | Command::Team(_)
         | Command::Routine(_)
+        | Command::Automation(_)
+        | Command::Calendar(_)
         | Command::Secret(_)
         | Command::HostedServices { .. }
         | Command::Account(_)
@@ -1486,6 +1602,12 @@ fn refuse_while_down(command: Command) {
         Command::InspectProject { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        Command::RemoveProject { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
+        Command::SetProjectBase { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
@@ -1496,6 +1618,8 @@ fn refuse_while_down(command: Command) {
         Command::Room(command) => team_room::refuse(command, refusal),
         Command::Routine(command) => team_routines::refuse(command, refusal),
         Command::Extension(command) => extensions::refuse_while_down(command, refusal),
+        Command::Automation(command) => automations::refuse(command, refusal),
+        Command::Calendar(command) => calendar::refuse(command, refusal),
         Command::HostExtension { command, .. } => extensions::refuse_while_down(command, refusal),
         Command::HostRead { .. } => {}
         Command::HostAgentStop { reply, .. } => {
@@ -1525,7 +1649,9 @@ fn refuse_while_down(command: Command) {
         }
         Command::AgentStop { reply, .. }
         | Command::AgentResume { reply, .. }
-        | Command::AgentForget { reply, .. } => {
+        | Command::AgentForget { reply, .. }
+        | Command::AgentRename { reply, .. }
+        | Command::AgentArchive { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::BringBack { reply, .. } => {

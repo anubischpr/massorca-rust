@@ -13,6 +13,8 @@ pub enum Observed {
     Missing,
     /// A command that `cli install` made, which runs `points_to`.
     Ours { points_to: PathBuf },
+    /// A command that `cli install` made, which runs `points_to`, a binary that is no longer there.
+    Gone { points_to: PathBuf },
     /// Something massorca did not make.
     Foreign,
 }
@@ -27,6 +29,8 @@ pub enum State {
     NotOnPath,
     /// The command runs another binary.
     DifferentBinary,
+    /// The command runs a binary that is no longer there, such as one an update moved.
+    Stale,
     /// No command is installed.
     NotInstalled,
     /// Something massorca did not make is at the command path.
@@ -58,6 +62,7 @@ pub fn classify(
     match observed {
         Observed::Missing => State::NotInstalled,
         Observed::Foreign => State::Conflict,
+        Observed::Gone { .. } => State::Stale,
         Observed::Ours { points_to } if !same_path(platform, points_to, target) => {
             State::DifferentBinary
         }
@@ -70,6 +75,7 @@ pub fn install_step(observed: &Observed, target: &Path, platform: Platform) -> I
     match observed {
         Observed::Missing => InstallStep::Create,
         Observed::Foreign => InstallStep::Refuse,
+        Observed::Gone { .. } => InstallStep::Repoint,
         Observed::Ours { points_to } if same_path(platform, points_to, target) => InstallStep::Keep,
         Observed::Ours { .. } => InstallStep::Repoint,
     }
@@ -79,7 +85,7 @@ pub fn uninstall_step(observed: &Observed) -> UninstallStep {
     match observed {
         Observed::Missing => UninstallStep::Nothing,
         Observed::Foreign => UninstallStep::Refuse,
-        Observed::Ours { .. } => UninstallStep::Remove,
+        Observed::Ours { .. } | Observed::Gone { .. } => UninstallStep::Remove,
     }
 }
 
@@ -169,5 +175,22 @@ mod tests {
             classify(&Observed::Missing, target, Platform::Unix, Some(true)),
             State::NotInstalled
         );
+    }
+
+    #[test]
+    fn a_command_whose_binary_is_gone_is_stale_install_repoints_it_and_uninstall_removes_it() {
+        let target = Path::new("/opt/new/massorca");
+        let gone = Observed::Gone {
+            points_to: PathBuf::from("/opt/old/massorca"),
+        };
+        assert_eq!(
+            classify(&gone, target, Platform::Unix, Some(true)),
+            State::Stale
+        );
+        assert_eq!(
+            install_step(&gone, target, Platform::Unix),
+            InstallStep::Repoint
+        );
+        assert_eq!(uninstall_step(&gone), UninstallStep::Remove);
     }
 }

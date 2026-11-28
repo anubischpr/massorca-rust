@@ -12,6 +12,8 @@
 //! form that names a chat (decision 0167): it prints one reply, as its `--fake-mode` argument says, and reports its
 //! working folder and run identity variables when asked. Otherwise, as the Claude adapter starts a chat run, it plays a
 //! hand-written script of stream-json frames ([`claude_stream`]), and `--version` prints a Claude-style version line.
+//! Started as `app-server`, it is a stand-in for Codex's app-server (decision 0173): it answers the handshake, the thread
+//! and the turn requests itself and plays a script of JSON-RPC messages ([`codex_app_server`]).
 
 use std::env;
 use std::ffi::OsString;
@@ -115,6 +117,17 @@ const CLAUDE_STDIN_LOG_ENV: &str = "FAKE_CLAUDE_STDIN_LOG";
 /// A file the `-p` mode appends its arguments to, as one JSON array per run.
 const CLAUDE_ARGS_LOG_ENV: &str = "FAKE_CLAUDE_ARGS_LOG";
 
+/// The script of messages the `app-server` mode plays after a `thread/start`: one JSON value per line.
+const CODEX_SCRIPT_ENV: &str = "FAKE_CODEX_SCRIPT";
+/// The script the `app-server` mode plays after a `thread/resume` instead.
+const CODEX_RESUME_SCRIPT_ENV: &str = "FAKE_CODEX_RESUME_SCRIPT";
+/// A file the `app-server` mode appends each line of its standard input to.
+const CODEX_STDIN_LOG_ENV: &str = "FAKE_CODEX_STDIN_LOG";
+/// A file the `app-server` mode appends its arguments to, as one JSON array per run.
+const CODEX_ARGS_LOG_ENV: &str = "FAKE_CODEX_ARGS_LOG";
+/// The id of the thread a `thread/start` opens; `thr-fake` when unset.
+const CODEX_THREAD_ENV: &str = "FAKE_CODEX_THREAD";
+
 /// The lines of standard input, read as they arrive.
 type Input = io::Lines<io::StdinLock<'static>>;
 
@@ -128,6 +141,7 @@ fn main() -> ExitCode {
         Some("hang") => return hang(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
+        Some("app-server") => return codex_app_server(),
         Some("models") => return models(),
         // Print mode is the title one-shot (it asks for text output), a chat run (it asks for partial messages) or the
         // model listing (decision 0166).
@@ -663,7 +677,8 @@ const LISTING_COUNT_ENV: &str = "FAKE_AGENT_MODELS_COUNT";
 const LISTING_FAIL_ENV: &str = "FAKE_AGENT_MODELS_FAIL";
 /// Set to any value, a listing sleeps far past any test's time limit: a vendor CLI that hangs.
 const LISTING_HANG_ENV: &str = "FAKE_AGENT_MODELS_HANG";
-/// The token's field that names the account's models, as `id:label` strings.
+/// The token's field that names the account's models, as `id:label` strings, or `id:label:resolved` where `resolved` is
+/// the model id the vendor says the alias runs now (a Claude listing's `resolvedModel`).
 const LISTING_FIELD: &str = "listing";
 
 /// `models`: the account's listing as `id<TAB>label` lines, the shape of `agy models` (decision 0166).
@@ -678,7 +693,7 @@ fn models() -> ExitCode {
     let mut out = io::stdout().lock();
     match listing_from_home() {
         Some(models) => {
-            for (id, label) in models {
+            for (id, label, _) in models {
                 let _ = writeln!(out, "{id}\t{label}");
             }
         }
@@ -702,8 +717,12 @@ fn claude_models() -> ExitCode {
         Some(models) => {
             let rows: Vec<Value> = models
                 .iter()
-                .map(|(id, label)| {
-                    serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false })
+                .map(|(id, label, resolved)| {
+                    let mut row = serde_json::json!({ "value": id, "displayName": label, "supportsEffort": false });
+                    if let Some(resolved) = resolved {
+                        row["resolvedModel"] = Value::from(resolved.as_str());
+                    }
+                    row
                 })
                 .collect();
             serde_json::json!({
@@ -724,8 +743,9 @@ fn claude_models() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The listing the account's token names, as `(id, label)` pairs; `None` when there is no home, token or listing.
-fn listing_from_home() -> Option<Vec<(String, String)>> {
+/// The listing the account's token names, as `(id, label, resolved)` rows; `None` when there is no home, token or
+/// listing.
+fn listing_from_home() -> Option<Vec<(String, String, Option<String>)>> {
     let home = PathBuf::from(env::var_os(CREDENTIAL_HOME_ENV)?);
     let token: Value =
         serde_json::from_str(&fs::read_to_string(home.join(CREDENTIAL_FILE)).ok()?).ok()?;
@@ -733,8 +753,13 @@ fn listing_from_home() -> Option<Vec<(String, String)>> {
         .as_array()?
         .iter()
         .map(|entry| {
-            let (id, label) = entry.as_str()?.split_once(':')?;
-            Some((id.to_owned(), label.to_owned()))
+            let mut parts = entry.as_str()?.splitn(3, ':');
+            let (id, label) = (parts.next()?, parts.next()?);
+            Some((
+                id.to_owned(),
+                label.to_owned(),
+                parts.next().map(str::to_owned),
+            ))
         })
         .collect()
 }
@@ -1200,4 +1225,146 @@ fn hang_child() -> ExitCode {
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
+}
+
+/// The state of the `app-server` mode: the open thread and the last turn it started.
+#[derive(Default)]
+struct FakeCodex {
+    thread: String,
+    turns: u64,
+    /// `thread/resume` opened the thread.
+    resumed: bool,
+}
+
+impl FakeCodex {
+    /// Answers a request the mode serves itself: the handshake, the thread, a turn and an interrupt.
+    fn serve(&mut self, message: &Value) {
+        let id = &message["id"];
+        let result = match message["method"].as_str() {
+            Some("initialize") => serde_json::json!({ "userAgent": "fake-codex" }),
+            Some("thread/start") => {
+                self.thread = env::var(CODEX_THREAD_ENV).unwrap_or_else(|_| "thr-fake".to_owned());
+                serde_json::json!({ "thread": { "id": self.thread } })
+            }
+            Some("thread/resume") => {
+                self.resumed = true;
+                self.thread = message["params"]["threadId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                serde_json::json!({ "thread": { "id": self.thread } })
+            }
+            Some("turn/start") => {
+                self.turns += 1;
+                serde_json::json!({ "turn": { "id": format!("turn-{}", self.turns), "status": "inProgress" } })
+            }
+            Some("turn/interrupt") => serde_json::json!({}),
+            _ => return,
+        };
+        if !id.is_null() {
+            emit(&serde_json::json!({ "id": id, "result": result }));
+        }
+    }
+
+    /// A script step with `$THREAD` and `$TURN` replaced by the open thread and the last turn.
+    fn fill(&self, step: &str) -> String {
+        step.replace("$THREAD", &self.thread)
+            .replace("$TURN", &format!("turn-{}", self.turns))
+    }
+}
+
+/// Whether a line of standard input is what an `app-server` script's `await` waits for: a message with that method, or
+/// `response` (an answer to a request the script sent).
+fn codex_awaited(wanted: &str, message: &Value) -> bool {
+    match wanted {
+        "response" => message.get("method").is_none() && !message["id"].is_null(),
+        method => message["method"] == method,
+    }
+}
+
+/// The file a script's `{"hold_open":"<name>"}` step names, in the script's folder: the thread's answer waits for it.
+fn held_open_gate(script: &str, folder: &Path) -> Option<PathBuf> {
+    script.lines().find_map(|line| {
+        let step: Value = serde_json::from_str(line).ok()?;
+        Some(folder.join(step["hold_open"].as_str()?))
+    })
+}
+
+/// The app-server mode (decision 0173): a stand-in for `codex app-server`. It answers `initialize`, `thread/start` (with
+/// [`CODEX_THREAD_ENV`]'s thread), `thread/resume`, `turn/start` (turns `turn-1`, `turn-2`, ...) and `turn/interrupt`
+/// itself as they arrive. Once a thread is open it plays [`CODEX_SCRIPT_ENV`]'s script, or
+/// [`CODEX_RESUME_SCRIPT_ENV`]'s after a resume: `{"await":"<method>"|"response"}` waits for such a line,
+/// `{"sleep_ms":N}` waits, and any other line is written as it is, with `$THREAD` and `$TURN` filled in. Every input line
+/// is appended to [`CODEX_STDIN_LOG_ENV`]'s file and the arguments to [`CODEX_ARGS_LOG_ENV`]'s. After the script it
+/// serves requests until its input ends, then exits 0. A `{"hold_open":"<name>"}` step keeps the `thread/start` answer
+/// back until the file `<name>` in the script's folder exists, so a test can act while the thread still opens.
+fn codex_app_server() -> ExitCode {
+    let args: Vec<Value> = env::args().skip(1).map(Value::from).collect();
+    append_to(CODEX_ARGS_LOG_ENV, &Value::from(args).to_string());
+    let (lines, input) = std::sync::mpsc::channel::<Value>();
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            append_to(CODEX_STDIN_LOG_ENV, &line);
+            let message = serde_json::from_str(&line).unwrap_or(Value::Null);
+            if lines.send(message).is_err() {
+                break;
+            }
+        }
+    });
+    let mut codex = FakeCodex::default();
+    let next = || input.recv().ok();
+    // A script's `hold_open` step keeps the thread's answer back until its file exists, so a test can act while it opens.
+    let gate = env::var_os(CODEX_SCRIPT_ENV).and_then(|path| {
+        let path = PathBuf::from(path);
+        let text = fs::read_to_string(&path).ok()?;
+        held_open_gate(&text, path.parent()?)
+    });
+    // The script starts once a thread is open.
+    while codex.thread.is_empty() {
+        let Some(message) = next() else {
+            return ExitCode::SUCCESS;
+        };
+        if let Some(gate) = gate
+            .as_deref()
+            .filter(|_| message["method"] == "thread/start")
+        {
+            wait_for_file(gate);
+        }
+        codex.serve(&message);
+    }
+    let script = (codex.resumed)
+        .then(|| env::var_os(CODEX_RESUME_SCRIPT_ENV))
+        .flatten()
+        .or_else(|| env::var_os(CODEX_SCRIPT_ENV));
+    let Some(script) = script.and_then(|path| fs::read_to_string(path).ok()) else {
+        let _ = writeln!(io::stderr(), "fake-codex: no script");
+        return ExitCode::from(2);
+    };
+    for step in script.lines().filter(|line| !line.trim().is_empty()) {
+        let parsed: Value = serde_json::from_str(step).unwrap_or(Value::Null);
+        if let Some(wanted) = parsed["await"].as_str() {
+            loop {
+                let Some(message) = next() else {
+                    return ExitCode::SUCCESS;
+                };
+                codex.serve(&message);
+                if codex_awaited(wanted, &message) {
+                    break;
+                }
+            }
+        } else if let Some(wait) = parsed["sleep_ms"].as_u64() {
+            thread::sleep(Duration::from_millis(wait));
+        } else if parsed["hold_open"].is_string() {
+            // Read before the thread opened, above: nothing to play here.
+        } else {
+            let mut stdout = io::stdout().lock();
+            let _ = writeln!(stdout, "{}", codex.fill(step));
+            let _ = stdout.flush();
+        }
+    }
+    while let Some(message) = next() {
+        codex.serve(&message);
+    }
+    ExitCode::SUCCESS
 }

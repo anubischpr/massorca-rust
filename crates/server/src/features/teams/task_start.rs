@@ -316,6 +316,7 @@ fn task_worktree(
     changes: &mut Changes,
 ) -> Result<Workspace, ErrorBody> {
     let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: worktree_name(&task.title, attempt),
         branch: None,
@@ -347,6 +348,7 @@ fn linked_folder(
         Some(workspace) => workspace,
         None => {
             let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+                in_place: false,
                 project: project.to_owned(),
                 name: TEAMS_FOLDER.to_owned(),
                 branch: None,
@@ -439,6 +441,45 @@ fn spawn(
             cols: None,
             rows: None,
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
+            request_id: Some(request.to_owned()),
+            permission_mode: team_mode(agents, team, bot),
+            model: None,
+            fast: None,
+            effort: None,
+        },
+        grant,
+    )?;
+    Ok(session.id)
+}
+
+/// Starts `bot`'s one-turn reply run in the team's folder, in the mode its tasks run in (decision 0122). No task is
+/// linked: the room line that asked names the run.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn start_reply_run(
+    store: &Store,
+    agents: &Agents,
+    workspaces: &Workspaces,
+    team: &TeamRow,
+    bot: &BotRow,
+    prompt: String,
+    request: &str,
+    grant: SecretGrant,
+    changes: &mut Changes,
+) -> Result<String, ErrorBody> {
+    // The team folder is made under the gate, as a task start makes it.
+    let _gate = start_gate();
+    let workspace = team_folder(store, workspaces, team, changes)?;
+    let session = agents.start(
+        AgentStartParams {
+            workspace: Some(workspace.id),
+            kind: bot.kind.clone(),
+            prompt: Some(prompt),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            read_only: false,
+            title: Some(format!("{} replies in the Conference room", bot.name)),
+            cols: None,
+            rows: None,
             request_id: Some(request.to_owned()),
             permission_mode: team_mode(agents, team, bot),
             model: None,
@@ -619,6 +660,7 @@ fn team_folder(
         }
     };
     let workspace = workspaces.create_workspace(WorkspaceCreateParams {
+        in_place: false,
         project: project.id,
         name: team.id.clone(),
         branch: None,
@@ -887,6 +929,7 @@ mod tests {
         };
         store.insert_project(&project).expect("project");
         let workspace = WorkspaceRow {
+            in_place: false,
             id: new_id(),
             project_id: project.id,
             kind: WorkspaceKind::Folder,

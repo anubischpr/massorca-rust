@@ -2,8 +2,8 @@
 //! It reads when the page opens, when the picked host changes and on Refresh, and shows pv96's states for each answer.
 
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement, Role, SharedString, Styled, WeakEntity, div,
-    prelude::*, px,
+    AnyElement, App, Context, IntoElement, ParentElement, Role, SharedString, Styled, WeakEntity,
+    div, prelude::*, px,
 };
 use massorca_ui::components::banner::{Banner, BannerVariant};
 use massorca_ui::components::button::{Button, ButtonVariant};
@@ -108,6 +108,12 @@ impl Shell {
     pub(in crate::shell) fn next_placement_request(&mut self) -> u64 {
         self.marketplace_placement_request += 1;
         self.marketplace_placement_request
+    }
+
+    /// Asks for the removal of the copies MassOrca placed for a skill; the Skills page shows the review to confirm.
+    pub(in crate::shell) fn ask_remove_placement(&mut self, name: String, cx: &mut Context<Self>) {
+        self.marketplace_placement_review = Some(PlacementReview::Remove { name });
+        cx.notify();
     }
 }
 
@@ -546,10 +552,7 @@ fn toggle_details(shell: &WeakEntity<Shell>, cx: &mut App) {
 }
 
 fn start_remove(shell: &WeakEntity<Shell>, name: String, cx: &mut App) {
-    let _ = shell.update(cx, |shell, cx| {
-        shell.marketplace_placement_review = Some(PlacementReview::Remove { name });
-        cx.notify();
-    });
+    let _ = shell.update(cx, |shell, cx| shell.ask_remove_placement(name, cx));
 }
 
 fn confirm_remove(shell: &WeakEntity<Shell>, cx: &mut App) {

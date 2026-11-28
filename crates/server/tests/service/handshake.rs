@@ -42,20 +42,27 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::AGENT_SEEN,
             capabilities::AGENT_TITLE,
             capabilities::AGENTS,
+            capabilities::AUTOMATIONS,
             capabilities::BINARY_FRAMES,
+            capabilities::CALENDAR,
             capabilities::COMMANDS,
             capabilities::CONFIG,
             capabilities::DEVICES,
             capabilities::EVENTS,
+            capabilities::EXTENSION_POINTS,
             capabilities::EXTENSIONS_LOG,
             capabilities::EXTENSIONS_PROGRAMS,
             capabilities::EXTENSIONS_ROLLBACK,
             capabilities::EXTENSIONS,
+            capabilities::GIT_PROJECT_BRANCHES,
+            capabilities::GIT_REMOTE_IDENTITY,
             capabilities::GIT,
             capabilities::HOST,
             capabilities::NETWORK,
             capabilities::PAIRING_ADDRESS,
             capabilities::PAIRING_CANCEL,
+            capabilities::PROJECT_ICON_COLOR,
+            capabilities::PROJECT_INIT_GIT,
             capabilities::PROJECT_UPDATE,
             capabilities::PROJECTS,
             capabilities::SCRIPT_TRUST,
@@ -67,11 +74,14 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::SKILLS_PLACE,
             capabilities::SKILLS,
             capabilities::TEAM_ROOM,
+            capabilities::TEAM_ROOM_CARDS,
+            capabilities::TEAM_ROOM_REPLIES,
             capabilities::TEAMS,
             capabilities::TERMINAL_WAIT,
             capabilities::TERMINALS,
             capabilities::WORKSPACE_CHECK,
             capabilities::WORKSPACE_CURRENT,
+            capabilities::WORKSPACE_IN_PLACE,
             capabilities::WORKSPACE_RENAME,
             capabilities::WORKSPACE_UNIQUE_NAME,
             capabilities::WORKSPACE_UPDATE,
@@ -133,6 +143,31 @@ async fn a_first_frame_other_than_hello_is_refused() {
         "the connection closes after the refusal"
     );
     stop(running).await;
+}
+
+/// A refusal the client reads only after the service has stopped, its end of the pipe closed, still arrives.
+#[tokio::test]
+async fn a_refusal_read_after_the_service_closed_still_arrives() {
+    let home = temp_home();
+    let running = start(home.path(), "default").await;
+    let mut raw = Raw::open(home.path(), "default").await;
+    raw.send(&request(1, service::INFO, Value::Null)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // A stopped service has dropped every connection, so the refusal is read from a pipe the service closed.
+    stop(running).await;
+
+    let refusal = raw
+        .recv_step("the refusal")
+        .await
+        .expect("the refusal survives the close");
+    assert_eq!(
+        refusal_code(&refusal).as_deref(),
+        Some(codes::PROTOCOL_HANDSHAKE)
+    );
+    assert!(
+        raw.recv_step("the close after the refusal").await.is_none(),
+        "the connection closes after the refusal"
+    );
 }
 
 // The exact window is measured on a paused clock in `handshake.rs`; this checks a real connection honours it.

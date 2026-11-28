@@ -3712,6 +3712,7 @@ name = "massorca-core-git"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "libc",
  "massorca-core-remote",
  "massorca-process",
  "massorca-protocol",
@@ -3719,6 +3720,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "win32job",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3752,6 +3754,7 @@ dependencies = [
  "rusqlite",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
  "uuid",
 ]
 
@@ -3825,6 +3828,7 @@ dependencies = [
  "massorca-process",
  "massorca-protocol",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -3924,6 +3928,7 @@ dependencies = [
  "massorca-process",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "widestring",
  "windows-sys 0.61.2",
 ]

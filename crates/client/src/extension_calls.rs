@@ -8,6 +8,8 @@ use massorca_protocol::methods::extensions::{
     ProgramUpdateReview, ProgramUpdated,
 };
 
+use massorca_protocol::methods::extension_points::{self, ExtensionPointsList};
+
 use crate::client::Client;
 use crate::error::ClientError;
 
@@ -15,6 +17,11 @@ impl Client {
     /// `extensions.list`: the installed packages, in install order.
     pub async fn extension_list(&self) -> Result<ExtensionList, ClientError> {
         self.call(extensions::LIST, &()).await
+    }
+
+    /// `extensions.points`: what each owner registered on the tool, skill, view, theme and status-rule points (0153).
+    pub async fn extension_points(&self) -> Result<ExtensionPointsList, ClientError> {
+        self.call(extension_points::POINTS, &()).await
     }
 
     /// `extensions.get`: one item, installed or from the catalogue.

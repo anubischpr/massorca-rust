@@ -64,6 +64,7 @@ mod local {
     use std::sync::Arc;
 
     use interprocess::local_socket::tokio::Stream;
+    use massorca_profile::LocalStream;
     use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, Message, read_frame, write_message};
     use tokio::sync::mpsc;
 
@@ -71,7 +72,7 @@ mod local {
 
     pub(crate) fn spawn_local(stream: Stream) -> FrameIo {
         FrameIo::spawn_with(MAX_FRAME_LEN_LOCAL, |queues| {
-            let stream = Arc::new(stream);
+            let stream = Arc::new(LocalStream::new(stream));
             let reader = tokio::spawn(read_frames(Arc::clone(&stream), queues.inbound));
             let writer = tokio::spawn(write_frames(stream, queues.outbound));
             (reader, writer)
@@ -79,8 +80,8 @@ mod local {
     }
 
     /// Reads frames until the service closes the connection or a read fails; the frames go to `inbound`.
-    async fn read_frames(stream: Arc<Stream>, inbound: mpsc::Sender<Frame>) {
-        let mut recv: &Stream = &stream;
+    async fn read_frames(stream: Arc<LocalStream>, inbound: mpsc::Sender<Frame>) {
+        let mut recv: &Stream = stream.get();
         loop {
             match read_frame(&mut recv, MAX_FRAME_LEN_LOCAL).await {
                 Ok(Some(frame)) => {
@@ -94,8 +95,8 @@ mod local {
     }
 
     /// Writes queued requests in order until every sender is gone or a write fails.
-    async fn write_frames(stream: Arc<Stream>, mut outbound: mpsc::Receiver<Message>) {
-        let mut send: &Stream = &stream;
+    async fn write_frames(stream: Arc<LocalStream>, mut outbound: mpsc::Receiver<Message>) {
+        let mut send: &Stream = stream.get();
         while let Some(message) = outbound.recv().await {
             if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
                 .await

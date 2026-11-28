@@ -174,6 +174,7 @@ pub fn project_add(path: &Path) -> ProjectAddParams {
 
 pub fn create_params(project: &str, name: &str) -> WorkspaceCreateParams {
     WorkspaceCreateParams {
+        in_place: false,
         project: project.to_owned(),
         name: name.to_owned(),
         branch: None,

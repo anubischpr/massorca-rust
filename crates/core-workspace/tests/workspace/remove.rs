@@ -117,6 +117,7 @@ fn the_main_worktree_is_never_removed() {
     let fx = Fixture::new();
     let project = fx.repo_project();
     let row = WorkspaceRow {
+        in_place: false,
         id: new_id(),
         project_id: project.id.clone(),
         kind: StoreWorkspaceKind::Worktree,

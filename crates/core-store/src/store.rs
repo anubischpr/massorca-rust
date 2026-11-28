@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, OptionalExtension, Params, Row};
 
 use crate::error::StoreError;
+use crate::migration_files::FILE_MIGRATIONS;
 use crate::migrations::{self, MIGRATIONS};
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,7 +40,13 @@ impl Store {
         configure(&connection)?;
         step("store file");
         // WAL is switched on only after migration, so a refused newer database is never modified.
-        migrations::migrate_observed(&mut connection, Some(path), MIGRATIONS, &mut step)?;
+        migrations::migrate_observed(
+            &mut connection,
+            Some(path),
+            MIGRATIONS,
+            FILE_MIGRATIONS,
+            &mut step,
+        )?;
         enable_wal(&connection)?;
         step("store wal");
         Ok(Self::from_connection(connection))
@@ -49,7 +56,13 @@ impl Store {
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let mut connection = Connection::open_in_memory()?;
         configure(&connection)?;
-        migrations::migrate(&mut connection, None, MIGRATIONS)?;
+        migrations::migrate_observed(
+            &mut connection,
+            None,
+            MIGRATIONS,
+            FILE_MIGRATIONS,
+            &mut |_| {},
+        )?;
         Ok(Self::from_connection(connection))
     }
 
@@ -162,6 +175,7 @@ mod tests {
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
+        // The frozen list and the migration files are built in one step, with one commit.
         assert_eq!(
             parts,
             [
@@ -171,6 +185,17 @@ mod tests {
                 "store wal"
             ],
             "a new database is built in one step"
+        );
+        let recorded: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM store_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            usize::try_from(recorded).unwrap(),
+            super::FILE_MIGRATIONS.len(),
+            "every migration file is recorded as applied"
         );
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
