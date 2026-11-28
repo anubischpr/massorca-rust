@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use massorca_client::Client;
 use massorca_protocol::capabilities;
+use massorca_protocol::methods::forwards::ForwardParams;
 use massorca_protocol::methods::host::HostPorts;
 use massorca_protocol::methods::projects::{self, Project, ProjectAddParams, ProjectKind};
 use massorca_protocol::methods::terminals::{
@@ -15,14 +16,17 @@ use massorca_protocol::methods::terminals::{
 };
 use massorca_protocol::methods::workspaces::{self, Workspace, WorkspaceCreateParams};
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use crate::common::{connect, start, stop, temp_home};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// Set in the terminal's environment: the `listener` test then listens and writes its port to the file it names.
-const LISTENER_ENV: &str = "MASSORCA_HOST_PORTS_LISTENER";
+pub(crate) const LISTENER_ENV: &str = "MASSORCA_HOST_PORTS_LISTENER";
 
-/// Not a test of its own: the child a terminal runs. It listens on a free port, writes the port to the file named in
-/// `LISTENER_ENV`, and waits. Returns at once unless started that way.
+/// Not a test of its own: the child a terminal runs. It listens on a free port, prints its URL as a dev server does,
+/// writes the port to the file named in `LISTENER_ENV`, and echoes each connection for two minutes. Returns at once
+/// unless started that way.
 #[test]
 fn listener() {
     let Some(file) = std::env::var_os(LISTENER_ENV) else {
@@ -30,12 +34,35 @@ fn listener() {
     };
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a local listener");
     let port = listener.local_addr().expect("its address").port();
+    let mut out = std::io::stdout().lock();
+    std::io::Write::write_fmt(
+        &mut out,
+        format_args!("  Local:   http://localhost:{port}/app/?token=sekrit-token#top\n"),
+    )
+    .expect("the URL is printed");
+    std::io::Write::flush(&mut out).expect("stdout flushes");
+    drop(out);
     std::fs::write(file, port.to_string()).expect("the port is written");
-    std::thread::sleep(Duration::from_secs(120));
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(120));
+        std::process::exit(0);
+    });
+    for connection in listener.incoming() {
+        let Ok(mut connection) = connection else {
+            continue;
+        };
+        std::thread::spawn(move || {
+            let Ok(mut reader) = connection.try_clone() else {
+                return;
+            };
+            let _ = std::io::copy(&mut reader, &mut connection);
+            let _ = connection.shutdown(std::net::Shutdown::Write);
+        });
+    }
 }
 
 /// The terminal's program: this test binary, running only `listener`, so the listener is the terminal's child.
-fn listener_shell() -> ShellSpec {
+pub(crate) fn listener_shell() -> ShellSpec {
     let exe = std::env::current_exe().expect("the test binary");
     ShellSpec {
         program: exe.to_str().expect("a utf-8 path").to_owned(),
@@ -56,7 +83,7 @@ fn utf8(path: &Path) -> String {
 }
 
 /// The port the listener child wrote, once it is listening.
-async fn written_port(file: &Path) -> u16 {
+pub(crate) async fn written_port(file: &Path) -> u16 {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         if let Some(port) = std::fs::read_to_string(file)
@@ -71,7 +98,7 @@ async fn written_port(file: &Path) -> u16 {
 }
 
 /// `host.ports`, asked until the terminal's listener shows (a sample is shared for about a second).
-async fn listed(client: &Client, terminal: &str, port: u16) -> HostPorts {
+pub(crate) async fn listed(client: &Client, terminal: &str, port: u16) -> HostPorts {
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let ports = client.host_ports().await.expect("host.ports");
@@ -175,12 +202,57 @@ async fn a_listener_of_a_terminal_is_listed_with_its_workspace_and_the_terminals
     assert!(entry.pid > 0, "{entry:?}");
     assert!(!entry.process_name.is_empty(), "{entry:?}");
     assert!(!ports.unverifiable, "{ports:?}");
+    // The URL the terminal printed for the port, and no forward yet (decision 0131).
+    assert_eq!(
+        entry.url.as_deref(),
+        Some(format!("http://localhost:{port}/app/").as_str()),
+        "{entry:?}"
+    );
+    assert!(entry.url_printed && !entry.forwarded, "{entry:?}");
     let status = ports
         .terminals
         .iter()
         .find(|status| status.terminal_id == terminal.id)
         .expect("the terminal has a status");
     assert!(!status.unverifiable && !status.partial, "{status:?}");
+
+    // A forward of the port marks it, and carries bytes to the terminal's listener and back.
+    let forward = client
+        .forward_open(&ForwardParams {
+            port,
+            address: None,
+            local_port: None,
+        })
+        .await
+        .expect("host.forward");
+    let marked = client.host_ports().await.expect("host.ports");
+    assert!(
+        marked
+            .ports
+            .iter()
+            .any(|entry| entry.port == port && entry.forwarded),
+        "{marked:?}"
+    );
+    let (local, socket) = tokio::io::duplex(1024);
+    let tunnel = {
+        let client = client.clone();
+        let id = forward.info().id.clone();
+        tokio::spawn(async move { client.forward_tunnel(&id, socket).await })
+    };
+    let (mut read, mut write) = tokio::io::split(local);
+    write.write_all(b"to the dev server").await.expect("send");
+    write.shutdown().await.expect("end of data");
+    let mut back = Vec::new();
+    tokio::time::timeout(TIMEOUT, read.read_to_end(&mut back))
+        .await
+        .expect("the echo returns")
+        .expect("read");
+    assert_eq!(back, b"to the dev server");
+    tunnel
+        .await
+        .expect("tunnel task")
+        .expect("the tunnel opens");
+    drop(forward);
 
     // The service's own listener is not listed: this test process is the service.
     let own = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a listener of the service");

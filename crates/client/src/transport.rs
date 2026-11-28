@@ -1,19 +1,19 @@
 //! Frame transports. A connection reads and writes frames through two tasks and two queues, so the handshake and the
 //! client above them do not know which transport they run on (decision 0040). Only the reader reads.
 
-use massorca_protocol::{Frame, Message};
+use massorca_protocol::Frame;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const INBOUND_CAPACITY: usize = 64;
-/// Requests and cancels queued for the writer. A caller waits for room rather than queueing without limit.
+/// Requests, cancels and stream bytes queued for the writer. A caller waits for room rather than queueing without limit.
 const OUTBOUND_CAPACITY: usize = 256;
 
 /// The two queues of one connection and the tasks that move frames between them and the transport.
 #[derive(Debug)]
 pub struct FrameIo {
     pub(crate) inbound: mpsc::Receiver<Frame>,
-    pub(crate) outbound: mpsc::Sender<Message>,
+    pub(crate) outbound: mpsc::Sender<Frame>,
     pub(crate) reader: JoinHandle<()>,
     pub(crate) writer: JoinHandle<()>,
     /// The largest frame body this transport carries before the service names its own limit.
@@ -24,7 +24,7 @@ pub struct FrameIo {
 #[derive(Debug)]
 pub struct FrameQueues {
     pub inbound: mpsc::Sender<Frame>,
-    pub outbound: mpsc::Receiver<Message>,
+    pub outbound: mpsc::Receiver<Frame>,
 }
 
 impl FrameIo {
@@ -65,7 +65,7 @@ mod local {
 
     use interprocess::local_socket::tokio::Stream;
     use massorca_profile::LocalStream;
-    use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, Message, read_frame, write_message};
+    use massorca_protocol::{Frame, MAX_FRAME_LEN_LOCAL, read_frame, write_frame};
     use tokio::sync::mpsc;
 
     use super::FrameIo;
@@ -94,11 +94,11 @@ mod local {
         }
     }
 
-    /// Writes queued requests in order until every sender is gone or a write fails.
-    async fn write_frames(stream: Arc<LocalStream>, mut outbound: mpsc::Receiver<Message>) {
+    /// Writes queued frames in order until every sender is gone or a write fails.
+    async fn write_frames(stream: Arc<LocalStream>, mut outbound: mpsc::Receiver<Frame>) {
         let mut send: &Stream = stream.get();
-        while let Some(message) = outbound.recv().await {
-            if write_message(&mut send, &message, MAX_FRAME_LEN_LOCAL)
+        while let Some(frame) = outbound.recv().await {
+            if write_frame(&mut send, &frame, MAX_FRAME_LEN_LOCAL)
                 .await
                 .is_err()
             {

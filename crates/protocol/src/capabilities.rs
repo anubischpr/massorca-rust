@@ -122,6 +122,8 @@ pub const SKILLS_PLACE: &str = "skills-place/1";
 pub const SERVICES: &str = "services/1";
 /// Figures read on the host that runs the service: `host.memory` (decision 0081).
 pub const HOST: &str = "host/1";
+/// Port forwards to loopback ports on the host (`host.forward*`, decision 0131): needs `binary-frames/1` too.
+pub const PORT_FORWARD: &str = "port-forward/1";
 /// The command table: `commands.describe`, which lists every command with its method, permission and parameters.
 pub const COMMANDS: &str = "commands/1";
 /// Scheduled automation definitions (`automation.*`, decision 0123). Not offered by a service that predates them.

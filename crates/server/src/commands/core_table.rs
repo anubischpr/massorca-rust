@@ -66,9 +66,55 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
         ),
         command(
             "host.ports",
-            "Show the listening ports of the terminals' processes",
+            "Show the listening ports of the terminals' processes, their URLs and forwards",
             "host.ports",
             no_args(),
+        ),
+        // A CLI composition: it opens `host.forward`, then `host.forward_connect` per local connection; `--list` and
+        // `--stop` call `host.forwards` and `host.forward_stop`.
+        command(
+            "host.forward",
+            "Forward a local port to a loopback port on a paired host, or list or stop the host's forwards",
+            "host.forward",
+            json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "local": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                    "bind": { "type": "string" },
+                    "list": { "type": "boolean" },
+                    "stop": { "type": "string" }
+                }
+            }),
+        ),
+        // Protocol steps of `host forward`, like the chat methods: no CLI path of their own (decision 0131).
+        command(
+            "host.forward-connect",
+            "Carry one connection to a forward's port on the host, as stream bytes both ways",
+            "host.forward_connect",
+            json!({
+                "type": "object",
+                "required": ["forward"],
+                "properties": { "forward": { "type": "string" } }
+            }),
+        ),
+        command(
+            "host.forwards",
+            "List the forwards open on the host (host forward NAME --list)",
+            "host.forwards",
+            no_args(),
+        ),
+        command(
+            "host.forward-stop",
+            "Stop a forward on the host (host forward NAME --stop FORWARD)",
+            "host.forward_stop",
+            json!({
+                "type": "object",
+                "required": ["forward"],
+                "properties": { "forward": { "type": "string" } }
+            }),
         ),
         // A CLI composition like `service.status`: its method is the first request, `service.info`, on the host.
         command(

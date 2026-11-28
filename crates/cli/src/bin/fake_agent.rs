@@ -139,6 +139,7 @@ fn main() -> ExitCode {
         Some("whoami-json") => return whoami_json(),
         Some("logout") => return logout(),
         Some("hang") => return hang(),
+        Some("dev-server") => return dev_server(),
         Some("hang-child") => return hang_child(),
         Some("chat") => return chat(),
         Some("app-server") => return codex_app_server(),
@@ -1032,6 +1033,35 @@ fn logout() -> ExitCode {
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
+    }
+    ExitCode::SUCCESS
+}
+
+/// A dev server for the port tests (decision 0131): it listens on a free loopback port, prints its URL as Vite does, and
+/// echoes each connection until the other side ends its data, for five minutes.
+fn dev_server() -> ExitCode {
+    let Ok(listener) = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(address) = listener.local_addr() else {
+        return ExitCode::FAILURE;
+    };
+    say(&format!(
+        "  Local:   http://localhost:{}/app/",
+        address.port()
+    ));
+    thread::spawn(|| {
+        thread::sleep(Duration::from_secs(300));
+        std::process::exit(0);
+    });
+    for connection in listener.incoming().flatten() {
+        thread::spawn(move || {
+            let mut connection = connection;
+            if let Ok(mut reader) = connection.try_clone() {
+                let _ = io::copy(&mut reader, &mut connection);
+                let _ = connection.shutdown(std::net::Shutdown::Write);
+            }
+        });
     }
     ExitCode::SUCCESS
 }

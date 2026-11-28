@@ -62,6 +62,7 @@ async fn welcome_offers_the_registered_capabilities() {
             capabilities::NETWORK,
             capabilities::PAIRING_ADDRESS,
             capabilities::PAIRING_CANCEL,
+            capabilities::PORT_FORWARD,
             capabilities::PROJECT_ICON_COLOR,
             capabilities::PROJECT_INIT_GIT,
             capabilities::PROJECT_UPDATE,
