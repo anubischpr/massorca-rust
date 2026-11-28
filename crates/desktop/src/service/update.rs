@@ -35,6 +35,8 @@ use crate::model::chat_transcript::ChatTranscript;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreUpdate {
     Connection(ConnectionState),
+    /// A run of the automation with this id was recorded, started or ended (`automation.changed`, decision 0125).
+    AutomationChanged(String),
     /// Every project and workspace, after a connect or an overflow. Replaces what was held.
     Resync {
         projects: Vec<Project>,
@@ -72,6 +74,7 @@ pub enum StoreUpdate {
     AgentNoProjectOffered(bool),
     /// Whether the service offers import source detection (`agent-import-detect/1`), read on each connect.
     AgentImportDetectOffered(bool),
+    AutomationDestinationsOffered(bool),
     /// Whether the service offers a model and an effort on `agent.start` (`agent-options/1`), read on each connect.
     AgentOptionsOffered(bool),
     /// Whether the service offers chat sessions (`agent-chat/1`), read on each connect.
@@ -323,6 +326,8 @@ pub struct StoreState {
     pub agent_no_project: bool,
     /// Whether the service offers import source detection (`agent-import-detect/1`); without it the Import folder is typed.
     pub agent_import_detect: bool,
+    /// Whether the service offers automation destinations (`automation-destinations/1`); without it none is sent.
+    pub automation_destinations: bool,
     /// Whether the service offers `model` and `effort` on `agent.start` (`agent-options/1`); without it neither is sent.
     pub agent_options: bool,
     /// Whether the service offers chat sessions (`agent-chat/1`); without it every start page opens on Terminal.
@@ -355,6 +360,8 @@ pub struct StoreState {
     /// Workspaces seen created with no session yet, by id, with the kind chosen for each (`None` when the service made
     /// it). In memory only; a session ends the entry, so no placeholder comes back once its session is archived (A97).
     pub awaiting_session: BTreeMap<String, Option<String>>,
+    /// How many `automation.changed` events arrived; the Automations page reads again when it grows (decision 0125).
+    pub automation_changes: u64,
 }
 
 impl Default for StoreState {
@@ -392,6 +399,7 @@ impl Default for StoreState {
             agent_seen: false,
             agent_no_project: false,
             agent_import_detect: false,
+            automation_destinations: false,
             agent_options: false,
             agent_chat: false,
             agent_fast: false,
@@ -407,6 +415,7 @@ impl Default for StoreState {
             chat_refused: BTreeMap::new(),
             config: Vec::new(),
             awaiting_session: BTreeMap::new(),
+            automation_changes: 0,
         }
     }
 }
@@ -509,6 +518,9 @@ impl StoreState {
             StoreUpdate::AgentSeenOffered(offered) => self.agent_seen = offered,
             StoreUpdate::AgentNoProjectOffered(offered) => self.agent_no_project = offered,
             StoreUpdate::AgentImportDetectOffered(offered) => self.agent_import_detect = offered,
+            StoreUpdate::AutomationDestinationsOffered(offered) => {
+                self.automation_destinations = offered;
+            }
             StoreUpdate::AgentOptionsOffered(offered) => self.agent_options = offered,
             StoreUpdate::AgentChatOffered(offered) => self.agent_chat = offered,
             StoreUpdate::AgentFastOffered(offered) => self.agent_fast = offered,
@@ -549,6 +561,9 @@ impl StoreState {
             }
             StoreUpdate::Git(update) => self.apply_git(update),
             StoreUpdate::Teams(read) => self.apply_teams(read),
+            StoreUpdate::AutomationChanged(_) => {
+                self.automation_changes = self.automation_changes.wrapping_add(1);
+            }
             StoreUpdate::TeamRoom(read) => keep_newest(&mut self.team_rooms, read),
             StoreUpdate::Extensions(read) => self.apply_extensions(read),
             StoreUpdate::HostMarketplace(read) => self.apply_host_marketplace(read),

@@ -104,6 +104,8 @@ pub const TEAM_ROOM_CARDS: &str = "team-room/2";
 /// Conversation replies in a team's room: `ask` and `reply_to` of `team.room_post`, and the `quoted` and `typing` fields
 /// of `team.room_list` (decision 0122). A host that has it also keeps `team-room/1` and `team-room/2`.
 pub const TEAM_ROOM_REPLIES: &str = "team-room/3";
+/// Bot delegation (`team.delegate`, `team.delegation_tree`, decision 0128). A host that has it also keeps `teams/1`.
+pub const TEAM_DELEGATE: &str = "team-delegate/1";
 /// Extension install and management (`extensions.*`, decision 0062).
 pub const EXTENSIONS: &str = "extensions/1";
 /// Rolling a package back to the version its update replaced (`extensions.rollback`).
@@ -137,3 +139,10 @@ pub const COMMANDS: &str = "commands/1";
 pub const AUTOMATIONS: &str = "automations/1";
 /// The Calendar (`calendar.occurrences`, decision 0124). Not offered by a service that predates it.
 pub const CALENDAR: &str = "calendar/1";
+/// Automation runs (`automation.run_now`, `automation.runs` and the `automation.changed` topic, decision 0125). A host
+/// that has it also keeps `automations/1`.
+pub const AUTOMATION_RUNS: &str = "automation-runs/1";
+/// Automation destinations (decision 0127): `destination` on create, update and show, and the refusals of a run.
+pub const AUTOMATION_DESTINATIONS: &str = "automation-destinations/1";
+/// Messages between the bots of a delegation (`team.message_send`, `team.message_reply`, `team.inbox`, decision 0129).
+pub const TEAM_MESSAGES: &str = "team-messages/1";

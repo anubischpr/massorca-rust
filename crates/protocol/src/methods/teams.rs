@@ -3,10 +3,13 @@
 //! A team is selected by id or exact name. A bot or project is selected by id, or by exact name within its team.
 //! Every enum here has an `Unknown` variant for values from a newer peer; fields are only ever added (0002).
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::methods::projects::ProjectKind;
-use crate::methods::tasks::{CardState, Column};
+use crate::methods::tasks::{CardState, Column, Task};
+use crate::methods::team_room::WorkerOutcome;
 
 /// Params: [`TeamCreateParams`]. Result: [`Team`].
 pub const CREATE: &str = "team.create";
@@ -38,6 +41,12 @@ pub const PROJECT_REMOVE: &str = "team.project_rm";
 pub const PROJECT_SHOW: &str = "team.project_show";
 /// Params: [`BoardParams`]. Result: [`Board`].
 pub const BOARD: &str = "team.board";
+/// Params: [`TeamDelegateParams`]. Result: [`TeamDelegated`]. Called by a bot's agent run (capability `team-delegate/1`).
+pub const DELEGATE: &str = "team.delegate";
+/// Params: [`crate::methods::tasks::TaskRef`]. Result: [`DelegationTree`], the task and the children it delegated.
+pub const DELEGATION_TREE: &str = "team.delegation_tree";
+/// Params: [`TeamRef`]. Result: [`DelegationList`], every delegated child of the team's tasks, oldest first.
+pub const DELEGATION_LIST: &str = "team.delegation_list";
 /// Params: [`TeamMemoryListParams`]. Result: [`TeamMemoryList`], newest first.
 pub const MEMORY_LIST: &str = "team.memory_list";
 /// Params: [`TeamMemoryAddParams`]. Result: [`TeamMemoryLine`].
@@ -617,4 +626,108 @@ pub struct RoutineRun {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutineRunList {
     pub runs: Vec<RoutineRun>,
+}
+
+/// Params of `team.delegate` (decision 0128). The run names its own `session` and `agent_token`; the caller is that run's
+/// bot, and the task the run works on is the parent the child links to. `text` is never logged.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamDelegateParams {
+    /// The teammate that takes the child: id or exact name in the team it goes to. Absent: picked by competence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+    pub text: String,
+    /// The team the child task is filed in, by id or exact name. Absent: the caller's own team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    /// The child only reads: it runs in its parent's workspace instead of a workspace of its own.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
+    /// The delegating run's session (`MASSORCA_AGENT_SESSION`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The run token of `session` (`MASSORCA_AGENT_TOKEN`). `Debug` never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_token: Option<String>,
+    /// A key for this call: a repeat from the same parent task returns the child the first call made (decision 0128).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+impl fmt::Debug for TeamDelegateParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TeamDelegateParams")
+            .field("bot", &self.bot)
+            .field("text", &"[redacted]")
+            .field("team", &self.team)
+            .field("read_only", &self.read_only)
+            .field("request_id", &self.request_id)
+            .field("session", &self.session)
+            .field(
+                "agent_token",
+                &self.agent_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
+/// Result of `team.delegate`: the child task, started when its bot could start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamDelegated {
+    pub task: Task,
+    /// The task the child is linked to: the one the delegating run works on.
+    pub parent: String,
+    /// `true` when competence picked the bot because `bot` was absent.
+    pub picked: bool,
+}
+
+/// Result of `team.delegation_tree`: a task and the children it delegated, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationTree {
+    pub task: Task,
+    pub children: Vec<DelegationChild>,
+}
+
+/// Result of `team.delegation_list`: every delegated child of a team's tasks, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationList {
+    pub links: Vec<DelegationLink>,
+}
+
+/// One delegated child and the task that delegated it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationLink {
+    /// The delegating task's id.
+    pub parent: String,
+    pub read_only: bool,
+    pub child: Task,
+    /// The child's last report to its parent (decision 0129); absent from older hosts.
+    #[serde(default, skip_serializing_if = "ChildReport::is_empty")]
+    pub report: ChildReport,
+}
+
+/// One child in a delegation tree. Its status is the task's own: its column and outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationChild {
+    pub task: Task,
+    /// The child only read in its parent's workspace.
+    pub read_only: bool,
+    /// The child's last report to its parent (decision 0129); absent from older hosts.
+    #[serde(default, skip_serializing_if = "ChildReport::is_empty")]
+    pub report: ChildReport,
+}
+
+/// What a delegated child last told its parent (decision 0129): the subject of its latest `status` message, and the
+/// outcome of its `worker_done`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WorkerOutcome>,
+}
+
+impl ChildReport {
+    pub fn is_empty(&self) -> bool {
+        self.status.is_none() && self.outcome.is_none()
+    }
 }

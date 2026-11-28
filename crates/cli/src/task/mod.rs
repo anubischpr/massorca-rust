@@ -164,8 +164,11 @@ pub async fn execute(
             output.success(&list, &lines);
         }
         TaskCommand::Show { task } => {
-            let shown = client.task_show(&TaskRef { task }).await?;
-            output.success(&shown, &text::task_details(&shown));
+            let shown = client.task_show(&TaskRef { task: task.clone() }).await?;
+            let tree = client.team_delegation_tree(&TaskRef { task }).await?;
+            let mut lines = text::task_details(&shown);
+            lines.extend(text::delegation_lines(&tree.children));
+            output.success(&shown, &lines);
         }
         TaskCommand::Update(args) => {
             let task = client

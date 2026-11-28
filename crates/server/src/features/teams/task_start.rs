@@ -146,6 +146,8 @@ pub(super) fn start_task(
             ));
         }
     };
+    // Read before the attempt opens, so a refused mode leaves no attempt behind.
+    let mode = super::team_delegate::child_mode(store, agents, &team, &bot, &row)?;
     let attempt = store
         .begin_task_start_attempt(&row.id, &new_id())
         .map_err(store_error)?
@@ -187,7 +189,7 @@ pub(super) fn start_task(
         project.as_ref(),
         place.branch().map(String::as_str),
     );
-    let session = match spawn(agents, &place, &team, &bot, &row, text, &request, grant) {
+    let session = match spawn(agents, &place, mode, &bot, &row, text, &request, grant) {
         Ok(session) => session,
         Err(error) => {
             return Err(after_failed_start(
@@ -259,6 +261,12 @@ fn prepare(
     attempt: &str,
     changes: &mut Changes,
 ) -> Result<Place, ErrorBody> {
+    if let Some(workspace) = super::team_delegate::read_only_workspace(store, workspaces, task)? {
+        return Ok(Place {
+            workspace,
+            own_worktree: false,
+        });
+    }
     if let Some(place) = linked_place(store, workspaces, task, attempt, changes)? {
         return Ok(place);
     }
@@ -422,7 +430,7 @@ fn fold_accent(ch: char) -> char {
 fn spawn(
     agents: &Agents,
     place: &Place,
-    team: &TeamRow,
+    mode: Option<String>,
     bot: &BotRow,
     task: &TaskRow,
     prompt: String,
@@ -442,7 +450,7 @@ fn spawn(
             rows: None,
             // A retry of an attempt that left a live run finds that run instead of starting a second one.
             request_id: Some(request.to_owned()),
-            permission_mode: team_mode(agents, team, bot),
+            permission_mode: mode,
             model: None,
             fast: None,
             effort: None,
@@ -494,7 +502,7 @@ pub(super) fn start_reply_run(
 /// The mode a team's bot runs in (decision 0072, amendment "team access"; decision 0083): a full-access team names the
 /// first bypass mode its kind declares that a start can apply; a team with default access, or a kind with no such mode,
 /// passes none, so the vendor CLI starts in its own default.
-fn team_mode(agents: &Agents, team: &TeamRow, bot: &BotRow) -> Option<String> {
+pub(super) fn team_mode(agents: &Agents, team: &TeamRow, bot: &BotRow) -> Option<String> {
     if team.access != ACCESS_FULL {
         return None;
     }

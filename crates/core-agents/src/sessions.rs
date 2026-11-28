@@ -1539,6 +1539,17 @@ impl Agents {
         Ok(files)
     }
 
+    /// Types a system prompt, such as a teammate's message (decision 0129). Unlike [`Agents::prompt`] it does not lift
+    /// the session's queue pauses and is not announced as the person's prompt.
+    pub fn system_prompt(
+        &self,
+        selector: &str,
+        text: &str,
+        force: bool,
+    ) -> Result<PromptReceipt, AgentError> {
+        self.send_prompt(selector, text, force, false, &[])
+    }
+
     /// The typing [`Agents::prompt`] does. `lift_queue_pauses` says the person sent it, which lifts the session's queue
     /// pauses; a system prompt, such as a bring-back's, does not (decision 0084, D5).
     pub(crate) fn send_prompt(

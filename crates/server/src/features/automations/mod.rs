@@ -1,13 +1,22 @@
-//! Scheduled automation definitions (decision 0123): `automation.create`, `list`, `show`, `update`, `rm`, `enable` and
-//! `disable` under capability `automations/1`. A definition is stored and listed here; no run is started.
+//! Scheduled automations: their definitions (decision 0123), `automation.create`, `list`, `show`, `update`, `rm`,
+//! `enable` and `disable` under capability `automations/1`; and their runs (decision 0125): the timer, the agent launch,
+//! completion, `automation.run_now` and `automation.runs` under capability `automation-runs/1`. Where runs work is a
+//! destination (decision 0127), under capability `automation-destinations/1`.
 
 mod calls;
+mod completion;
 mod definition;
+mod destination;
+mod launch;
 mod occurrences;
+mod run_calls;
+mod runs;
 mod selectors;
+mod timer;
 mod view;
 
-pub(crate) use occurrences::upcoming_runs;
+pub(crate) use occurrences::{done_runs, upcoming_runs};
+pub(crate) use timer::follow_automations;
 
 use massorca_protocol::capabilities;
 use massorca_protocol::methods::automations;
@@ -73,6 +82,26 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
             cap,
             Permission::Workspace,
             calls::disable,
+        )?,
+        registries
+            .capabilities
+            .register(capabilities::AUTOMATION_RUNS, Owner::Core)?,
+        registries
+            .capabilities
+            .register(capabilities::AUTOMATION_DESTINATIONS, Owner::Core)?,
+        methods.register(
+            Owner::Core,
+            automations::RUN_NOW,
+            capabilities::AUTOMATION_RUNS,
+            Permission::Workspace,
+            run_calls::run_now,
+        )?,
+        methods.register(
+            Owner::Core,
+            automations::RUNS,
+            capabilities::AUTOMATION_RUNS,
+            Permission::Read,
+            run_calls::runs,
         )?,
     ])
 }

@@ -425,5 +425,71 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command("task.rm", "Remove a task", "task.rm", selector("task")),
+        command(
+            "team.delegate",
+            "Hand a task to a teammate from inside a bot's run",
+            "team.delegate",
+            json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text": { "type": "string" },
+                    "bot": { "type": "string" },
+                    "team": { "type": "string" },
+                    "read_only": { "type": "boolean" }
+                }
+            }),
+        ),
+        command(
+            "team.message.send",
+            "Message the parent's or a child's bot from inside a bot's run",
+            "team.message_send",
+            json!({
+                "type": "object",
+                "required": ["to", "type", "subject", "body"],
+                "properties": {
+                    "to": { "type": "string" },
+                    "type": { "enum": ["status", "question", "worker_done", "handoff", "escalation"] },
+                    "priority": { "enum": ["normal", "high", "urgent"] },
+                    "subject": { "type": "string" },
+                    "body": { "type": "string" },
+                    "outcome": { "enum": ["succeeded", "failed"] },
+                    "reply_to": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.message.reply",
+            "Answer a message in this bot run's inbox",
+            "team.message_reply",
+            json!({
+                "type": "object",
+                "required": ["message", "body"],
+                "properties": {
+                    "message": { "type": "string" },
+                    "body": { "type": "string" },
+                    "type": { "enum": ["status", "question", "handoff", "escalation"] },
+                    "priority": { "enum": ["normal", "high", "urgent"] }
+                }
+            }),
+        ),
+        command(
+            "team.inbox",
+            "List this bot run's unread messages",
+            "team.inbox",
+            json!({ "type": "object", "properties": { "mark_read": { "type": "boolean" } } }),
+        ),
+        command(
+            "team.delegation.list",
+            "List a team's delegated tasks",
+            "team.delegation_list",
+            selector("team"),
+        ),
+        command(
+            "team.delegation.tree",
+            "Show a task's delegation tree",
+            "team.delegation_tree",
+            selector("task"),
+        ),
     ]
 }

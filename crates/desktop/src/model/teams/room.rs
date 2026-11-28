@@ -5,8 +5,10 @@
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use massorca_protocol::methods::tasks::Column as WireColumn;
-use massorca_protocol::methods::team_room::{RoomAuthor, RoomCard, RoomQuote, TeamRoomMessage};
-use massorca_protocol::methods::teams::{Routine, RoutineCadence};
+use massorca_protocol::methods::team_room::{
+    RoomAuthor, RoomCard, RoomQuote, TeamRoomMessage, WorkerOutcome,
+};
+use massorca_protocol::methods::teams::{DelegationLink, Routine, RoutineCadence};
 
 use super::types::{BotId, Team};
 use crate::service::{TeamIds, TeamRoomRead};
@@ -70,8 +72,43 @@ pub enum Speaker {
 /// The task a line is about, as its card shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomTask {
+    pub id: String,
     pub title: String,
     pub column: &'static str,
+    /// The children the task delegated, oldest first (decision 0128).
+    pub children: Vec<RoomChild>,
+}
+
+/// A child a task delegated, as its card lists it under the task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomChild {
+    pub title: String,
+    pub column: &'static str,
+    /// The child only read in its parent's workspace.
+    pub read_only: bool,
+    /// The subject of the child's latest status message to its parent (decision 0129).
+    pub status: Option<String>,
+    /// The outcome its `worker_done` reported: `succeeded` or `failed`.
+    pub reported: Option<&'static str>,
+}
+
+impl RoomChild {
+    /// The row a task card lists the child as: title, state, workspace, report and latest status (X-DL-01).
+    pub fn row_text(&self) -> String {
+        let mut text = format!("{} · {}", self.title, self.column);
+        if self.read_only {
+            text.push_str(" · reads in the parent's workspace");
+        }
+        if let Some(reported) = self.reported {
+            text.push_str(" · reported ");
+            text.push_str(reported);
+        }
+        if let Some(status) = &self.status {
+            text.push_str(" · ");
+            text.push_str(status);
+        }
+        text
+    }
 }
 
 /// The room of `team` from the store's read of it.
@@ -81,19 +118,26 @@ pub fn room_view(
     ids: &TeamIds,
     zone: &TimeZone,
 ) -> RoomView {
+    let links = read.map_or(&[][..], |read| read.delegations.as_slice());
     match read.map(|read| &read.room) {
         None => RoomView::Loading,
         Some(Err(refusal)) => RoomView::Unavailable(refusal.sentence()),
         Some(Ok(messages)) => RoomView::Lines(
             messages
                 .iter()
-                .map(|message| room_line(message, team, ids, zone))
+                .map(|message| room_line(message, team, ids, zone, links))
                 .collect(),
         ),
     }
 }
 
-fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZone) -> RoomLine {
+fn room_line(
+    message: &TeamRoomMessage,
+    team: &Team,
+    ids: &TeamIds,
+    zone: &TimeZone,
+    links: &[DelegationLink],
+) -> RoomLine {
     let speaker = match message.author {
         RoomAuthor::Person => Speaker::Person,
         RoomAuthor::Bot if message.card.is_some() => Speaker::Room,
@@ -112,8 +156,10 @@ fn room_line(message: &TeamRoomMessage, team: &Team, ids: &TeamIds, zone: &TimeZ
         text: message.text.clone(),
         time: clock_text(message.created_at_ms, zone),
         task: message.task.as_ref().map(|task| RoomTask {
+            id: task.id.clone(),
             title: task.title.clone(),
             column: column_word(task.column),
+            children: children_of(&task.id, links),
         }),
         routine: message.routine.as_ref().map(|routine| RoomRoutine {
             name: routine.name.clone(),
@@ -147,6 +193,30 @@ fn routine_when(routine: &Routine) -> String {
 }
 
 /// The column a task card names.
+/// The children `parent` delegated, oldest first, as the task card lists them.
+fn children_of(parent: &str, links: &[DelegationLink]) -> Vec<RoomChild> {
+    links
+        .iter()
+        .filter(|link| link.parent == parent)
+        .map(|link| RoomChild {
+            title: link.child.title.clone(),
+            column: column_word(link.child.column),
+            read_only: link.read_only,
+            status: link.report.status.clone(),
+            reported: link.report.outcome.and_then(outcome_word),
+        })
+        .collect()
+}
+
+/// The word a child row reports its `worker_done` with; an outcome from a newer peer shows none.
+fn outcome_word(outcome: WorkerOutcome) -> Option<&'static str> {
+    match outcome {
+        WorkerOutcome::Succeeded => Some("succeeded"),
+        WorkerOutcome::Failed => Some("failed"),
+        WorkerOutcome::Unknown => None,
+    }
+}
+
 fn column_word(column: WireColumn) -> &'static str {
     match column {
         WireColumn::Open => "Open",
@@ -186,6 +256,7 @@ mod tests {
     use crate::model::teams::{SampleTeamsSource, TeamsSource};
     use crate::service::Refusal;
     use massorca_protocol::methods::tasks::{CardState, Task, TaskOrigin};
+    use massorca_protocol::methods::teams::ChildReport;
 
     fn team() -> Team {
         SampleTeamsSource.teams().teams()[0].clone()
@@ -218,6 +289,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Ok(vec![reply, message(RoomAuthor::Person, None, "plain")]),
         };
         let RoomView::Lines(lines) =
@@ -257,6 +329,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =
@@ -288,6 +361,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Err(Refusal::unavailable("The service is not connected.")),
         };
         assert!(matches!(
@@ -331,6 +405,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Ok(vec![
                 message(RoomAuthor::Person, None, "We need sign-in"),
                 answer,
@@ -352,11 +427,110 @@ mod tests {
         assert_eq!(
             lines[1].task,
             Some(RoomTask {
+                id: "task-1".to_owned(),
                 title: "Sign-in".to_owned(),
-                column: "Running"
+                column: "Running",
+                children: Vec::new(),
             })
         );
         assert_eq!(lines[2].speaker, Speaker::Gone);
+    }
+
+    #[test]
+    fn a_task_card_lists_the_children_it_delegated_and_no_others() {
+        let team = team();
+        let ids = TeamIds::default();
+        let mut answer = message(RoomAuthor::Bot, Some(("b1", "Mara")), "Added to the Board");
+        answer.task = Some(wire_task("task-1", "Sign-in", WireColumn::Running));
+        let links = vec![
+            DelegationLink {
+                parent: "task-1".to_owned(),
+                read_only: true,
+                child: wire_task("task-2", "Review the headers", WireColumn::Open),
+                report: ChildReport::default(),
+            },
+            DelegationLink {
+                parent: "task-9".to_owned(),
+                read_only: false,
+                child: wire_task("task-10", "Elsewhere", WireColumn::Open),
+                report: ChildReport::default(),
+            },
+        ];
+        let read = TeamRoomRead {
+            team: "t".to_owned(),
+            number: 1,
+            answers_cards: true,
+            answers_replies: true,
+            typing: Vec::new(),
+            delegations: links,
+            room: Ok(vec![answer]),
+        };
+        let RoomView::Lines(lines) = room_view(Some(&read), &team, &ids, &TimeZone::UTC) else {
+            panic!("the room has lines");
+        };
+        let task = lines[0].task.as_ref().expect("the line is about a task");
+        assert_eq!(
+            task.children,
+            vec![RoomChild {
+                title: "Review the headers".to_owned(),
+                column: "Open",
+                read_only: true,
+                status: None,
+                reported: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_child_row_shows_its_latest_status_and_its_reported_outcome() {
+        let links = vec![DelegationLink {
+            parent: "task-1".to_owned(),
+            read_only: false,
+            child: wire_task("task-2", "Write the lexer", WireColumn::Done),
+            report: ChildReport {
+                status: Some("Numbers parse".to_owned()),
+                outcome: Some(WorkerOutcome::Succeeded),
+            },
+        }];
+        let children = children_of("task-1", &links);
+        assert_eq!(children[0].status.as_deref(), Some("Numbers parse"));
+        assert_eq!(children[0].reported, Some("succeeded"));
+        assert_eq!(
+            children[0].row_text(),
+            "Write the lexer · Done · reported succeeded · Numbers parse"
+        );
+        let unknown = DelegationLink {
+            report: ChildReport {
+                status: None,
+                outcome: Some(WorkerOutcome::Unknown),
+            },
+            ..links[0].clone()
+        };
+        let quiet = children_of("task-1", &[unknown]);
+        assert_eq!(quiet[0].row_text(), "Write the lexer · Done");
+    }
+
+    fn wire_task(id: &str, title: &str, column: WireColumn) -> Task {
+        Task {
+            id: id.to_owned(),
+            team_id: "t".to_owned(),
+            project_id: None,
+            bot_id: Some("b1".to_owned()),
+            title: title.to_owned(),
+            body: String::new(),
+            origin: TaskOrigin::Room,
+            column,
+            state: CardState::Working,
+            session_id: None,
+            outcome: None,
+            error: None,
+            error_code: None,
+            workspace_id: None,
+            branch: None,
+            last_known: false,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        }
     }
 
     #[test]
@@ -379,6 +553,7 @@ mod tests {
             answers_cards: true,
             answers_replies: true,
             typing: Vec::new(),
+            delegations: Vec::new(),
             room: Ok(vec![line]),
         };
         let RoomView::Lines(lines) =

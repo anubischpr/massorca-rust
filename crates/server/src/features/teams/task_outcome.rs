@@ -139,7 +139,8 @@ fn tell_room(
     task: &TaskRow,
     outcome: TaskOutcome,
 ) -> Result<Option<String>, StoreError> {
-    if task.origin != TaskOrigin::Room {
+    // A delegated child reports to its room as a room task does (decision 0128).
+    if task.origin != TaskOrigin::Room && store.task_delegation_parent(&task.id)?.is_none() {
         return Ok(None);
     }
     store.insert_team_room_message(&TeamRoomMessageRow {
@@ -162,7 +163,7 @@ fn tell_room(
 }
 
 /// The word a room line opens with for a latched outcome, as the Board's card states read.
-fn outcome_word(outcome: TaskOutcome) -> &'static str {
+pub(super) fn outcome_word(outcome: TaskOutcome) -> &'static str {
     match outcome {
         TaskOutcome::Success => "Done",
         TaskOutcome::Failure => "Stuck",

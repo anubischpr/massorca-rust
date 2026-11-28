@@ -1,7 +1,9 @@
-//! Typed helpers over the `automations/1` methods: scheduled automation definitions (decision 0123).
+//! Typed helpers over the `automations/1` methods: scheduled automation definitions (decision 0123); and over
+//! `automation-runs/1`: run now and run history (decision 0125).
 
 use massorca_protocol::methods::automations::{
-    self, Automation, AutomationCreateParams, AutomationList, AutomationRef, AutomationUpdateParams,
+    self, Automation, AutomationCreateParams, AutomationList, AutomationRef, AutomationRun,
+    AutomationRunList, AutomationRunsParams, AutomationUpdateParams,
 };
 
 use crate::client::Client;
@@ -56,5 +58,21 @@ impl Client {
         params: &AutomationRef,
     ) -> Result<Automation, ClientError> {
         self.call(automations::DISABLE, params).await
+    }
+
+    /// `automation.run_now`: runs an automation now; returns the run it recorded, also when it could not start.
+    pub async fn automation_run_now(
+        &self,
+        params: &AutomationRef,
+    ) -> Result<AutomationRun, ClientError> {
+        self.call(automations::RUN_NOW, params).await
+    }
+
+    /// `automation.runs`: an automation's runs, newest first, one page at a time.
+    pub async fn automation_runs(
+        &self,
+        params: &AutomationRunsParams,
+    ) -> Result<AutomationRunList, ClientError> {
+        self.call(automations::RUNS, params).await
     }
 }

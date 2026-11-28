@@ -6,14 +6,16 @@ use massorca_protocol::methods::tasks::{
     TaskUpdateParams,
 };
 use massorca_protocol::methods::team_room::{
-    self, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
+    self, TeamInbox, TeamInboxParams, TeamMessageReplyParams, TeamMessageSendParams,
+    TeamMessageSent, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
     TeamRoomPostParams, TeamRoomPosted,
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
-    Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun, RoutineRunList,
-    RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams, TeamList, TeamMemoryAddParams,
-    TeamMemoryLine, TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
+    DelegationList, DelegationTree, Routine, RoutineAddParams, RoutineList, RoutineRef, RoutineRun,
+    RoutineRunList, RoutineRunsParams, RoutineUpdateParams, Team, TeamCreateParams,
+    TeamDelegateParams, TeamDelegated, TeamList, TeamMemoryAddParams, TeamMemoryLine,
+    TeamMemoryList, TeamMemoryListParams, TeamMemoryRemoveParams, TeamProject,
     TeamProjectAddParams, TeamProjectList, TeamProjectRemoveParams, TeamProjectShowParams,
     TeamProjectUpdateParams, TeamRef, TeamRemoveParams, TeamUpdateParams,
 };
@@ -126,6 +128,53 @@ impl Client {
         params: &TeamRoomPostParams,
     ) -> Result<TeamRoomPosted, ClientError> {
         self.call(team_room::ROOM_POST, params).await
+    }
+
+    /// `team.delegate`: a bot's run hands a task to a teammate as a child of its own task (decision 0128). Capability
+    /// `team-delegate/1`.
+    pub async fn team_delegate(
+        &self,
+        params: &TeamDelegateParams,
+    ) -> Result<TeamDelegated, ClientError> {
+        self.call(teams::DELEGATE, params).await
+    }
+
+    /// `team.delegation_tree`: a task and the children it delegated, oldest first (capability `team-delegate/1`).
+    pub async fn team_delegation_tree(
+        &self,
+        params: &TaskRef,
+    ) -> Result<DelegationTree, ClientError> {
+        self.call(teams::DELEGATION_TREE, params).await
+    }
+
+    /// `team.delegation_list`: every delegated child of a team's tasks, for the Conference room (capability `team-delegate/1`).
+    pub async fn team_delegation_list(
+        &self,
+        params: &TeamRef,
+    ) -> Result<DelegationList, ClientError> {
+        self.call(teams::DELEGATION_LIST, params).await
+    }
+
+    /// `team.message_send`: a bot's run messages its parent's or a child's bot (decision 0129). Capability
+    /// `team-messages/1`.
+    pub async fn team_message_send(
+        &self,
+        params: &TeamMessageSendParams,
+    ) -> Result<TeamMessageSent, ClientError> {
+        self.call(team_room::MESSAGE_SEND, params).await
+    }
+
+    /// `team.message_reply`: answers a message in the run's inbox on its thread (capability `team-messages/1`).
+    pub async fn team_message_reply(
+        &self,
+        params: &TeamMessageReplyParams,
+    ) -> Result<TeamMessageSent, ClientError> {
+        self.call(team_room::MESSAGE_REPLY, params).await
+    }
+
+    /// `team.inbox`: the run's unread messages, oldest first (capability `team-messages/1`).
+    pub async fn team_inbox(&self, params: &TeamInboxParams) -> Result<TeamInbox, ClientError> {
+        self.call(team_room::INBOX, params).await
     }
 
     /// `team.room_answer`: answers a room's choice card once (decision 0121).

@@ -38,8 +38,31 @@ impl Shell {
             .and_then(|id| self.automations.find(id))
             .cloned();
         self.automations.open_editor(target);
-        self.automation_editor = Some(AutomationEditor::new(automation.as_ref(), cx));
+        let workspaces = self.workspace_choices();
+        let supported = self.store.read(cx).state().automation_destinations;
+        self.automation_editor = Some(AutomationEditor::new(
+            automation.as_ref(),
+            &workspaces,
+            supported,
+            cx,
+        ));
         cx.notify();
+    }
+
+    /// The workspaces the editor's select offers, as (label, workspace id); each label names its project.
+    fn workspace_choices(&self) -> Vec<(String, String)> {
+        let mut choices = Vec::new();
+        for project in &self.model.snapshot().projects {
+            for host in &project.hosts {
+                for workspace in &host.workspaces {
+                    choices.push((
+                        format!("{} / {}", project.name, workspace.name),
+                        workspace.id.clone(),
+                    ));
+                }
+            }
+        }
+        choices
     }
 
     pub(in crate::shell) fn close_automation_editor(&mut self, cx: &mut Context<Self>) {
@@ -138,12 +161,14 @@ impl Shell {
         cx.notify();
     }
 
-    /// Reads the automations when the Automations page is on screen and nothing has read them yet.
+    /// Reads the automations when the Automations page is on screen and nothing has read them yet, and again when the
+    /// service announced a change.
     pub(in crate::shell) fn ensure_automations_loaded(&mut self, cx: &mut Context<Self>) {
-        if self.model.canvas() != Canvas::Page(Page::Automations)
-            || self.automations.is_read()
-            || self.automations_loading
-        {
+        if self.model.canvas() != Canvas::Page(Page::Automations) || self.automations_loading {
+            return;
+        }
+        if self.automations.is_read() {
+            self.follow_automation_changes(cx);
             return;
         }
         let Some(service) = self.service.clone() else {
@@ -171,7 +196,7 @@ impl Shell {
         }
     }
 
-    fn automations_read(
+    pub(super) fn automations_read(
         &mut self,
         answer: Result<AutomationList, Refusal>,
         cx: &mut Context<Self>,

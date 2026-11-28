@@ -347,6 +347,16 @@ pub const TASK_CIRCUIT_BROKEN: &str = "task.circuit_broken";
 pub const TASK_NO_BOT: &str = "task.no_bot";
 /// The task changed between the call reading it and writing it; read it again and retry.
 pub const TASK_CHANGED: &str = "task.changed";
+/// `team.delegate` from a call that is not an agent run of a bot with its run token (decision 0128).
+pub const TEAM_DELEGATE_NOT_A_BOT: &str = "team.delegate_not_a_bot";
+/// `team.delegate` without `bot`, where no teammate's job or skills match the task's words.
+pub const TEAM_DELEGATE_NO_BOT: &str = "team.delegate_no_bot";
+/// `team.delegate` naming the bot its own run is; a bot never delegates to itself.
+pub const TEAM_DELEGATE_SELF: &str = "team.delegate_self";
+/// `team.delegate` from a child already `agents.delegation_depth` levels below its root; its data names the limit.
+pub const TEAM_DELEGATE_DEPTH_EXCEEDED: &str = "team.delegate_depth_exceeded";
+/// `team.delegate` with `read_only` to another team: a read-only child shares its parent's workspace, so it stays in its team.
+pub const TEAM_DELEGATE_READS_OTHER_TEAM: &str = "team.delegate_reads_other_team";
 
 /// `marketplace.service.*` names a service this build does not know.
 pub const SERVICE_UNKNOWN: &str = "marketplace.service_unknown";
@@ -416,3 +426,37 @@ pub const AUTOMATION_SCHEDULE_INVALID: &str = "automation.schedule_invalid";
 pub const AUTOMATION_ZONE_INVALID: &str = "automation.zone_invalid";
 /// A calendar window that ends before it starts, or spans more than 62 days.
 pub const CALENDAR_WINDOW_INVALID: &str = "calendar.window_invalid";
+/// An automation run did not start because the automation has no project (decision 0125).
+pub const AUTOMATION_NO_PROJECT: &str = "automation.no_project";
+/// An automation occurrence was later than its grace, or replaced by a later one; it is never replayed.
+pub const AUTOMATION_RUN_MISSED: &str = "automation.run_missed";
+/// The service stopped before an automation run's agent started.
+pub const AUTOMATION_RUN_INTERRUPTED: &str = "automation.run_interrupted";
+/// An automation run's agent exited without reporting completion.
+pub const AUTOMATION_RUN_EXITED: &str = "automation.run_exited";
+/// An automation run's agent session is gone, so how it ended cannot be known.
+pub const AUTOMATION_RUN_STRANDED: &str = "automation.run_stranded";
+/// A run did not start because its destination workspace was removed (decision 0127).
+pub const AUTOMATION_DESTINATION_REMOVED: &str = "automation.destination_removed";
+/// A run did not start because its repository is no longer attached to this host: its folder is gone or it is no
+/// longer a git repository (decision 0127).
+pub const AUTOMATION_REPOSITORY_DETACHED: &str = "automation.repository_detached";
+/// A run did not start because its destination folder moved or is missing (decision 0127).
+pub const AUTOMATION_PATH_CHANGED: &str = "automation.path_changed";
+/// An automation's destination cannot be used: a workspace of another project, a worktree per run in a folder
+/// project, or a blank base branch (decision 0127).
+pub const AUTOMATION_DESTINATION_INVALID: &str = "automation.destination_invalid";
+/// A new worktree per run names a base branch that is not a commit of its project's repository (decision 0127).
+pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown";
+/// A team message call that is not an agent run of a bot's task with its run token (decision 0129).
+pub const TEAM_MESSAGE_NOT_A_BOT: &str = "team.message_not_a_bot";
+/// A team message to a task that is neither the sender's parent nor one of its children (decision 0129).
+pub const TEAM_MESSAGE_NO_EDGE: &str = "team.message_no_edge";
+/// A `worker_done` naming a task that does not exist.
+pub const TEAM_MESSAGE_UNKNOWN_TASK: &str = "team.message_unknown_task";
+/// A `worker_done` naming a task that is not the sender's own task delegated by the recipient.
+pub const TEAM_MESSAGE_NOT_YOUR_CHILD: &str = "team.message_not_your_child";
+/// A `worker_done` for a task that already ended with another outcome; its data names that outcome.
+pub const TEAM_MESSAGE_ALREADY_SETTLED: &str = "team.message_already_settled";
+/// A reply to, or a `reply_to` naming, a message that is not in the caller's conversations.
+pub const TEAM_MESSAGE_UNKNOWN: &str = "team.message_unknown";

@@ -17,6 +17,7 @@ use massorca_protocol::methods::agents::{
     AgentOptionsSet, AgentPromptParams, AgentResumeParams, AgentSession, AgentSetModeParams,
     AgentSetOptionsParams, AgentStartParams, BringBackResult, PromptReceipt,
 };
+use massorca_protocol::methods::automations::TOPIC_AUTOMATION_CHANGED;
 use massorca_protocol::methods::config::{ConfigKey, ConfigList, ConfigSet, ConfigValue};
 use massorca_protocol::methods::devices::{
     DeviceInfo, DeviceList, DeviceRevokeParams, NetworkStatus, PairingCancelParams,
@@ -1004,6 +1005,9 @@ impl Link {
         self.emit(StoreUpdate::AgentImportDetectOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_IMPORT_DETECT),
         ));
+        self.emit(StoreUpdate::AutomationDestinationsOffered(
+            client.has_capability(massorca_protocol::capabilities::AUTOMATION_DESTINATIONS),
+        ));
         self.emit(StoreUpdate::AgentOptionsOffered(
             client.has_capability(massorca_protocol::capabilities::AGENT_OPTIONS),
         ));
@@ -1257,6 +1261,8 @@ impl Link {
                 .await
                 .map(StoreUpdate::Teams),
             // The id is the team's: its room is read again.
+            // The id is the automation's; the page reads its list and run table again.
+            TOPIC_AUTOMATION_CHANGED => Ok(StoreUpdate::AutomationChanged(id)),
             TOPIC_TEAM_ROOM_CHANGED => team_room::read(client, &self.room_reads, id.clone())
                 .await
                 .map(StoreUpdate::TeamRoom),

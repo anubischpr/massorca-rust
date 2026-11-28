@@ -21,8 +21,11 @@ mod task_start;
 
 pub(crate) use routine_timer::follow_routines;
 pub(crate) use task_start::start_gate;
+pub(crate) use {task_start::worktree_name, task_state::observed_outcome};
 mod task_state;
 mod team;
+mod team_delegate;
+mod team_message;
 mod team_project;
 
 use massorca_core_agents::Agents;
@@ -52,6 +55,8 @@ pub(crate) fn register(registries: &Registries) -> Result<Vec<RegistrationHandle
     handles.extend(board::register(registries)?);
     handles.extend(routines::register(registries)?);
     handles.extend(room::register(registries)?);
+    handles.extend(team_delegate::register(registries)?);
+    handles.extend(team_message::register(registries)?);
     Ok(handles)
 }
 

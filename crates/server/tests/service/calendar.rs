@@ -101,6 +101,7 @@ async fn routines_and_automations_share_one_window_and_the_kind_filter_separates
             zone: Some("UTC".to_owned()),
             grace_minutes: None,
             creation_key: None,
+            destination: None,
         })
         .await
         .expect("automation.create");
