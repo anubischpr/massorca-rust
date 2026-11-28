@@ -18,6 +18,7 @@ use crate::context::AppState;
 use crate::shutdown::ShutdownSignal;
 
 use super::room_reply_end::{ReplyEnd, reply_end, settle_reply};
+use super::room_route;
 use super::task_state::{Session, observed_outcome};
 use super::{blocking_state, store_error};
 
@@ -44,15 +45,22 @@ pub(crate) async fn follow_task_outcomes(
 
 /// Latches what one change shows, then tells the Board about the task its session is linked to.
 async fn react(state: &Arc<AppState>, change: Change) {
-    let (session_id, outcome, end) = match change {
+    let (session_id, outcome, end, route_end) = match change {
         Change::Updated(session) => (
             session.id.clone(),
             observed_outcome(&session),
             reply_end(&session),
+            reply_end(&session),
         ),
-        Change::Forgotten(id) => (id, None, Some(ReplyEnd::Forgotten)),
+        Change::Forgotten(id) => (
+            id,
+            None,
+            Some(ReplyEnd::Forgotten),
+            Some(ReplyEnd::Forgotten),
+        ),
         Change::Account(_) | Change::Models(_) | Change::Queue(_) | Change::Chat(_) => return,
     };
+    let route_session = session_id.clone();
     let linked = blocking_state(state, move |store, agents| {
         let replied = match &end {
             Some(end) => settle_reply(store, agents, &session_id, end)?,
@@ -73,6 +81,10 @@ async fn react(state: &Arc<AppState>, change: Change) {
         }
         Err(error) => report(&error),
     }
+    // A routing query's run that ended places its room line (AUTO-13).
+    if let Some(end) = route_end {
+        room_route::settle(state, route_session, end).await;
+    }
 }
 
 /// Latches every session the agents domain lists now, and tells the Board about each linked task.
@@ -80,6 +92,7 @@ async fn resync(state: &Arc<AppState>) {
     let linked = blocking_state(state, |store, agents| {
         let sessions = agents.list(None).map_err(ErrorBody::from)?;
         let (mut linked, mut replied) = (Vec::new(), Vec::new());
+        let routed = room_route::ended_routes(store, &sessions)?;
         for session in &sessions {
             if let Some(end) = reply_end(session) {
                 replied.extend(settle_reply(store, agents, &session.id, &end)?);
@@ -88,17 +101,20 @@ async fn resync(state: &Arc<AppState>) {
                 latch_linked(store, &session.id, observed_outcome(session)).map_err(store_error)?,
             );
         }
-        Ok((linked, replied))
+        Ok((linked, replied, routed))
     })
     .await;
     match linked {
-        Ok((linked, replied)) => {
+        Ok((linked, replied, routed)) => {
             linked
                 .iter()
                 .for_each(|linked| publish_linked(state, linked));
             replied
                 .into_iter()
                 .for_each(|team| publish_room(state, team));
+            for (session, end) in routed {
+                room_route::settle(state, session, end).await;
+            }
         }
         Err(error) => report(&error),
     }

@@ -199,7 +199,8 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "text": { "type": "string" },
                     "bot": { "type": "string" },
-                    "to": { "type": "string" }
+                    "to": { "type": "string" },
+                    "route": { "type": "boolean" }
                 }
             }),
         ),
@@ -214,6 +215,33 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                     "team": { "type": "string" },
                     "message": { "type": "string" },
                     "choice": { "type": "string" }
+                }
+            }),
+        ),
+        command(
+            "team.room.mentions",
+            "List what an @ typed so far can name in a team's Conference room",
+            "team.room_mentions",
+            json!({
+                "type": "object",
+                "required": ["team"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "minimum": 0 }
+                }
+            }),
+        ),
+        command(
+            "team.room.resolve",
+            "Show what each mention of a Conference room line names",
+            "team.room_resolve",
+            json!({
+                "type": "object",
+                "required": ["team", "text"],
+                "properties": {
+                    "team": { "type": "string" },
+                    "text": { "type": "string" }
                 }
             }),
         ),

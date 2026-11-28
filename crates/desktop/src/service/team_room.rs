@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use massorca_client::{Client, ClientError};
 use massorca_protocol::methods::team_room::{
-    TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomListParams, TeamRoomMessage,
-    TeamRoomPostParams, TeamRoomPosted,
+    RoomMentions, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomListParams,
+    TeamRoomMentionsParams, TeamRoomMessage, TeamRoomPostParams, TeamRoomPosted,
 };
 use massorca_protocol::methods::teams::{DelegationLink, TeamRef};
 use massorca_protocol::{capabilities, codes};
@@ -80,6 +80,11 @@ pub(crate) enum RoomCommand {
         params: TeamRoomAnswerParams,
         reply: oneshot::Sender<Result<TeamRoomAnswered, Refusal>>,
     },
+    /// Asks what an `@` typed so far can name (AUTO-13); the room is not read again.
+    Mentions {
+        params: TeamRoomMentionsParams,
+        reply: oneshot::Sender<Result<RoomMentions, Refusal>>,
+    },
 }
 
 impl ServiceHandle {
@@ -92,6 +97,27 @@ impl ServiceHandle {
         self.ask(|reply| Command::Room(RoomCommand::Answer { params, reply }))
             .await
     }
+
+    /// `team.room_mentions`: what an `@` typed so far in a team's room can name. A host without `team-room/4` names
+    /// nothing.
+    pub async fn team_room_mentions(
+        &self,
+        params: TeamRoomMentionsParams,
+    ) -> Result<RoomMentions, Refusal> {
+        self.ask(|reply| Command::Room(RoomCommand::Mentions { params, reply }))
+            .await
+    }
+}
+
+/// The line as this host takes it: a host that routes gets `route` with no receiver, since the shell names the lead
+/// only as its fallback; any other host gets the receiver and no `route` (AUTO-13).
+fn for_host(mut params: TeamRoomPostParams, routes: bool) -> TeamRoomPostParams {
+    if params.route == Some(true) && routes {
+        params.to = None;
+    } else {
+        params.route = None;
+    }
+    params
 }
 
 /// The delegated children of a team's tasks. A host without the capability, or a refusal, has none to show.
@@ -170,6 +196,10 @@ pub(super) fn spawn_call(
             RoomCommand::Read { team } => team,
             RoomCommand::Post { params, reply } => {
                 let team = params.team.clone();
+                let params = for_host(
+                    params,
+                    client.has_capability(capabilities::TEAM_ROOM_ROUTING),
+                );
                 let answer = if client.has_capability(capabilities::TEAM_ROOM) {
                     client
                         .team_room_post(&params)
@@ -180,6 +210,20 @@ pub(super) fn spawn_call(
                 };
                 let _ = reply.send(answer);
                 team
+            }
+            RoomCommand::Mentions { params, reply } => {
+                let answer = if client.has_capability(capabilities::TEAM_ROOM_ROUTING) {
+                    client
+                        .team_room_mentions(&params)
+                        .await
+                        .map_err(|error| Refusal::from(&error))
+                } else {
+                    Ok(RoomMentions {
+                        mentions: Vec::new(),
+                    })
+                };
+                let _ = reply.send(answer);
+                return;
             }
             RoomCommand::Answer { params, reply } => {
                 let team = params.team.clone();
@@ -214,6 +258,9 @@ pub(super) fn refuse(command: RoomCommand, refusal: Refusal) {
         RoomCommand::Answer { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
+        RoomCommand::Mentions { reply, .. } => {
+            let _ = reply.send(Err(refusal));
+        }
     }
 }
 
@@ -234,6 +281,34 @@ mod tests {
                 message: text.to_owned(),
             }),
         }
+    }
+
+    #[test]
+    fn a_routed_line_drops_its_fallback_receiver_on_a_host_that_routes_and_its_route_elsewhere() {
+        let params = TeamRoomPostParams {
+            team: "t1".to_owned(),
+            text: "Fix it".to_owned(),
+            bot: None,
+            to: Some("b2".to_owned()),
+            session: None,
+            agent_token: None,
+            start: None,
+            reply_to: None,
+            ask: None,
+            route: Some(true),
+        };
+        let routed = for_host(params.clone(), true);
+        assert_eq!((routed.to, routed.route), (None, Some(true)));
+        let older = for_host(params.clone(), false);
+        assert_eq!((older.to.as_deref(), older.route), (Some("b2"), None));
+        let picked = for_host(
+            TeamRoomPostParams {
+                route: None,
+                ..params
+            },
+            true,
+        );
+        assert_eq!((picked.to.as_deref(), picked.route), (Some("b2"), None));
     }
 
     #[test]

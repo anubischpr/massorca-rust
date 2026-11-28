@@ -46,6 +46,8 @@ pub(super) struct Conversation<'a> {
     pub(super) workspaces: &'a Workspaces,
     pub(super) team: &'a TeamRow,
     pub(super) bots: &'a [BotRow],
+    /// What the line's mentions name (AUTO-13), given to the reply run.
+    pub(super) notes: Option<&'a str>,
 }
 
 /// Stores the person's line as a conversation of `bot` and starts that bot's reply run. A run that does not start, or
@@ -57,13 +59,7 @@ pub(super) fn converse(
     quoted: Option<&TeamRoomMessageRow>,
     changes: &mut Changes,
 ) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
-    let Conversation {
-        store,
-        agents,
-        workspaces,
-        team,
-        bots,
-    } = *room;
+    let Conversation { store, team, .. } = *room;
     let history = store
         .list_team_room(&team.id, Some(HISTORY_LINES))
         .map_err(store_error)?;
@@ -72,9 +68,61 @@ pub(super) fn converse(
     question.reply_bot_id = Some(bot.id.clone());
     question.reply_state = Some(OPEN.to_owned());
     insert_row(store, &question)?;
-    let prompt = prompt(team, bot, bots, &history, quoted, &question.text);
-    let request = format!("team.room_reply:{}", question.id);
     let mut lines = vec![question.clone()];
+    lines.extend(answer(room, bot, question, quoted, &history, changes)?);
+    Ok(lines)
+}
+
+/// Makes the stored person's line `line` a conversation of `bot` and starts its reply run, as `converse` does for a
+/// new line (a routed line, AUTO-13). Returns the lines it stored after it.
+pub(super) fn converse_posted(
+    room: &Conversation<'_>,
+    bot: &BotRow,
+    mut line: TeamRoomMessageRow,
+    changes: &mut Changes,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let store = room.store;
+    if !store
+        .open_team_room_reply(&line.id, Some(&bot.id))
+        .map_err(store_error)?
+    {
+        return Ok(Vec::new());
+    }
+    let history: Vec<TeamRoomMessageRow> = store
+        .list_team_room(&room.team.id, Some(HISTORY_LINES + 1))
+        .map_err(store_error)?
+        .into_iter()
+        .filter(|row| row.id != line.id)
+        .collect();
+    line.reply_bot_id = Some(bot.id.clone());
+    line.reply_state = Some(OPEN.to_owned());
+    answer(room, bot, line, None, &history, changes)
+}
+
+/// Starts `bot`'s reply run for the stored conversation line `question`. A run that does not start, or that already
+/// ended, is answered at once. Returns the lines it stored after the question.
+fn answer(
+    room: &Conversation<'_>,
+    bot: &BotRow,
+    mut question: TeamRoomMessageRow,
+    quoted: Option<&TeamRoomMessageRow>,
+    history: &[TeamRoomMessageRow],
+    changes: &mut Changes,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let Conversation {
+        store,
+        agents,
+        workspaces,
+        team,
+        bots,
+        notes,
+    } = *room;
+    let mut prompt = prompt(team, bot, bots, history, quoted, &question.text);
+    if let Some(notes) = notes {
+        prompt.push_str(&format!("\n{notes}\n"));
+    }
+    let request = format!("team.room_reply:{}", question.id);
+    let mut lines = Vec::new();
     let session = match start_reply_run(
         store,
         agents,

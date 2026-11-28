@@ -474,22 +474,53 @@ pub(super) fn start_reply_run(
     grant: SecretGrant,
     changes: &mut Changes,
 ) -> Result<String, ErrorBody> {
+    let run = RoomRun {
+        kind: bot.kind.clone(),
+        prompt,
+        title: format!("{} replies in the Conference room", bot.name),
+        request: request.to_owned(),
+        read_only: false,
+        permission_mode: team_mode(agents, team, bot),
+    };
+    start_room_run(store, agents, workspaces, team, run, grant, changes)
+}
+
+/// A one-turn run of the Conference room in the team's folder: a bot's reply, or the routing query (AUTO-13).
+pub(super) struct RoomRun {
+    pub(super) kind: String,
+    pub(super) prompt: String,
+    pub(super) title: String,
+    pub(super) request: String,
+    pub(super) read_only: bool,
+    pub(super) permission_mode: Option<String>,
+}
+
+/// Starts `run` in `team`'s folder and returns its session.
+pub(super) fn start_room_run(
+    store: &Store,
+    agents: &Agents,
+    workspaces: &Workspaces,
+    team: &TeamRow,
+    run: RoomRun,
+    grant: SecretGrant,
+    changes: &mut Changes,
+) -> Result<String, ErrorBody> {
     // The team folder is made under the gate, as a task start makes it.
     let _gate = start_gate();
     let workspace = team_folder(store, workspaces, team, changes)?;
     let session = agents.start(
         AgentStartParams {
             workspace: Some(workspace.id),
-            kind: bot.kind.clone(),
-            prompt: Some(prompt),
+            kind: run.kind,
+            prompt: Some(run.prompt),
             args: Vec::new(),
             env: BTreeMap::new(),
-            read_only: false,
-            title: Some(format!("{} replies in the Conference room", bot.name)),
+            read_only: run.read_only,
+            title: Some(run.title),
             cols: None,
             rows: None,
-            request_id: Some(request.to_owned()),
-            permission_mode: team_mode(agents, team, bot),
+            request_id: Some(run.request),
+            permission_mode: run.permission_mode,
             model: None,
             fast: None,
             effort: None,

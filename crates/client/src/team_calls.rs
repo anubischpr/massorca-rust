@@ -6,9 +6,9 @@ use massorca_protocol::methods::tasks::{
     TaskUpdateParams,
 };
 use massorca_protocol::methods::team_room::{
-    self, TeamInbox, TeamInboxParams, TeamMessageReplyParams, TeamMessageSendParams,
+    self, RoomMentions, TeamInbox, TeamInboxParams, TeamMessageReplyParams, TeamMessageSendParams,
     TeamMessageSent, TeamRoomAnswerParams, TeamRoomAnswered, TeamRoomList, TeamRoomListParams,
-    TeamRoomPostParams, TeamRoomPosted,
+    TeamRoomMentionsParams, TeamRoomPostParams, TeamRoomPosted, TeamRoomResolveParams,
 };
 use massorca_protocol::methods::teams::{
     self, Board, BoardParams, Bot, BotAddParams, BotList, BotRemoveParams, BotUpdateParams,
@@ -183,6 +183,22 @@ impl Client {
         params: &TeamRoomAnswerParams,
     ) -> Result<TeamRoomAnswered, ClientError> {
         self.call(team_room::ROOM_ANSWER, params).await
+    }
+
+    /// `team.room_mentions`: what an `@` typed so far in a room line can name (AUTO-13).
+    pub async fn team_room_mentions(
+        &self,
+        params: &TeamRoomMentionsParams,
+    ) -> Result<RoomMentions, ClientError> {
+        self.call(team_room::ROOM_MENTIONS, params).await
+    }
+
+    /// `team.room_resolve`: what each mention of a room line names (AUTO-13).
+    pub async fn team_room_resolve(
+        &self,
+        params: &TeamRoomResolveParams,
+    ) -> Result<RoomMentions, ClientError> {
+        self.call(team_room::ROOM_RESOLVE, params).await
     }
 
     /// `team.memory_list`: a team's memory lines, or one bot's, newest first.

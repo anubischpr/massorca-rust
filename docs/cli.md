@@ -458,6 +458,22 @@ an offer's secret is shown only when it is made. `server status` shows the same 
 
 The service log goes to the profile's log files only unless `--log-stderr` is given.
 
+### Conference room mentions and routing
+
+A team's Conference room reads typed mentions (AUTO-13): `@Name` names a bot of the team, `@team:Name` another
+team, `@project:Name` a project of the team, and `@file:path` a file inside the folder of one of the team's projects
+(the mentioned project's when the line names one). A posted line that names another team, and none of its own bots,
+goes to that team's Todo; a project mention links the task to that project, and the project and file mentions are
+added to the task's body or the reply's prompt. A typed mention that names nothing is refused with
+`team.room_mention_unknown`; a file mention that leaves its project's folder (`..`, an absolute path or a link) with
+`team.room_file_outside`. A plain `@word` that names no bot stays text. These need a host with `team-room/4`.
+
+| Command | What it does |
+|---|---|
+| `team room mentions <TEAM> [<QUERY>] [--limit <N>]` | Lists what an `@` typed so far can name: the bots, the other teams, the projects and `@file:`. A query starting with `file:` lists the files and folders of one folder of the team's projects (`file:src/` lists `src`); folders end with `/`. 20 without `--limit`, 100 at most. |
+| `team room resolve <TEAM> <TEXT>` | Shows what each mention of a line names, as a posted line reads it, and refuses an unknown one. |
+| `team room post <TEAM> <TEXT> --route [--no-start]` | Lets one routing query place a person's line that names no bot or team. The query runs the agent `agents.default_kind` names (else `claude`), read-only and without vault variables, and answers `route=bot:<name>`, `route=team:<name>`, `route=conversation` or `route=unclear`. The line goes to that bot as a task (or a one-time routine), to that team's Todo, to a conversation answered by the lead (else the first bot), or gets a choice card. The line waits in the room until the query answers; `team room list` shows where it went. Refused with `--bot`, `--to`, `--ask` and `--reply-to`. |
+
 ### Automations
 
 Scheduled automations (decision 0123) and their runs (decision 0125). The service runs each enabled automation's

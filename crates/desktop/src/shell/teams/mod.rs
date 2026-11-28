@@ -14,6 +14,7 @@ mod memory;
 mod memory_menu;
 mod new_project;
 mod project;
+mod room_mentions;
 mod routine_confirm;
 mod routine_form;
 mod routine_form_page;

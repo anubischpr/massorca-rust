@@ -446,6 +446,11 @@ pub const AUTOMATION_PATH_CHANGED: &str = "automation.path_changed";
 pub const AUTOMATION_DESTINATION_INVALID: &str = "automation.destination_invalid";
 /// A new worktree per run names a base branch that is not a commit of its project's repository (decision 0127).
 pub const AUTOMATION_BASE_BRANCH_UNKNOWN: &str = "automation.base_branch_unknown";
+/// A room line mentions a bot, team, project or file the room does not know (AUTO-13); `data` names the mention and its
+/// kind.
+pub const TEAM_ROOM_MENTION_UNKNOWN: &str = "team.room_mention_unknown";
+/// A room line's `@file:` mention leaves its project's folder, through `..`, an absolute path or a link (AUTO-13).
+pub const TEAM_ROOM_FILE_OUTSIDE: &str = "team.room_file_outside";
 /// A team message call that is not an agent run of a bot's task with its run token (decision 0129).
 pub const TEAM_MESSAGE_NOT_A_BOT: &str = "team.message_not_a_bot";
 /// A team message to a task that is neither the sender's parent nor one of its children (decision 0129).

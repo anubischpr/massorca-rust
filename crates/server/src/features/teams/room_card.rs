@@ -22,6 +22,7 @@ use crate::features::agents::secret_grant;
 use crate::features::workspace_domain::{for_mutation, publish};
 
 use super::room::{Request, Room, Start, deliver, insert_line, new_line, task_title, views};
+use super::room_mention::{self, Projects};
 use super::task::create_task;
 use super::task_start::{Changes, publish_changes};
 use super::{blocking, invalid, selectors, store_error};
@@ -57,13 +58,28 @@ pub(super) fn card_lines(
     admin: bool,
 ) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
     let person = insert_line(store, team, None, text, None)?;
+    let card = card_for(store, team, bots, &person.id, (at_once, admin), CARD_TEXT)?;
+    Ok(vec![person, card])
+}
+
+/// Stores the card that asks where the stored line `request` goes, saying `text`; `flags` are whether its task starts
+/// at once and whether its author held host-admin scope.
+pub(super) fn card_for(
+    store: &Store,
+    team: &TeamRow,
+    bots: &[BotRow],
+    request: &str,
+    flags: (bool, bool),
+    text: &str,
+) -> Result<TeamRoomMessageRow, ErrorBody> {
+    let (at_once, admin) = flags;
     let stored = StoredCard {
-        request: person.id.clone(),
+        request: request.to_owned(),
         start: at_once,
         admin,
         options: options(store, team, bots)?,
     };
-    let mut card = new_line(team, None, CARD_TEXT.to_owned(), None);
+    let mut card = new_line(team, None, text.to_owned(), None);
     // A card is the room's own line: a bot line of no bot, which the schema allows.
     card.author = "bot".to_owned();
     card.card = Some(
@@ -71,7 +87,7 @@ pub(super) fn card_lines(
             .map_err(|error| ErrorBody::new(codes::INTERNAL, error.to_string()))?,
     );
     store.insert_team_room_message(&card).map_err(store_error)?;
-    Ok(vec![person, card])
+    Ok(card)
 }
 
 /// Each bot of the team, then each other team, then this team's Todo.
@@ -292,9 +308,13 @@ fn make(
         text,
         start,
     } = answer;
+    let bots = store.list_bots(&team.id).map_err(store_error)?;
+    // The mentions are read again: a project or file removed since the card was posted is only left out.
+    let mentions = Projects::of(store, &start.workspaces, team)
+        .and_then(|projects| room_mention::resolve(store, team, &bots, &projects, &text))
+        .unwrap_or_default();
     match option.choice.split_once(':') {
         Some(("bot", target)) if option.kind == RoomChoiceKind::Bot => {
-            let bots = store.list_bots(&team.id).map_err(store_error)?;
             let bot = selectors::bot(store, team, target)?;
             let room = Room {
                 store,
@@ -308,26 +328,64 @@ fn make(
                 posted: true,
                 reply_to: None,
                 context: None,
+                mentions,
             };
             Ok(Made {
                 lines: deliver(&room, start, &bot, request, changes)?,
                 other_team: None,
             })
         }
-        _ => file_task(store, team, option, text, saved),
+        _ => file_task(store, team, option, text, mentions.notes(), saved),
     }
 }
 
+/// Stores a person's line that names another team, and files it in that team's Todo as a card's team option does
+/// (AUTO-13).
+pub(super) fn send_to_team(
+    store: &Store,
+    team: &TeamRow,
+    other: &TeamRow,
+    text: String,
+    notes: Option<String>,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let person = insert_line(store, team, None, text.clone(), None)?;
+    let mut lines = vec![person];
+    lines.extend(file_to_team(store, team, other, text, notes)?);
+    Ok(lines)
+}
+
+/// Files a request already in `team`'s room in `other`'s Todo, and says so in the room.
+pub(super) fn file_to_team(
+    store: &Store,
+    team: &TeamRow,
+    other: &TeamRow,
+    text: String,
+    notes: Option<String>,
+) -> Result<Vec<TeamRoomMessageRow>, ErrorBody> {
+    let option = RoomChoice {
+        choice: format!("team:{}", other.id),
+        kind: RoomChoiceKind::Team,
+        label: other.name.clone(),
+    };
+    Ok(file_task(store, team, &option, text, notes, &Cell::new(false))?.lines)
+}
+
 /// Files a card's request as a Todo task of another team or of the card's own team, and says so in the card's room.
+/// The task's body is the request, then `notes`.
 fn file_task(
     store: &Store,
     team: &TeamRow,
     option: &RoomChoice,
     text: String,
+    notes: Option<String>,
     saved: &Cell<bool>,
 ) -> Result<Made, ErrorBody> {
     let bots = store.list_bots(&team.id).map_err(store_error)?;
     let title = task_title(&text, &bots);
+    let text = match notes {
+        Some(notes) => format!("{text}\n\n{notes}"),
+        None => text,
+    };
     let (kind, target) = option
         .choice
         .split_once(':')
@@ -584,7 +642,14 @@ mod tests {
         let mut gone = alpha.clone();
         gone.id = new_id();
         let failed = under_claim(&store, &card, &sent.choice, |saved| {
-            file_task(&store, &gone, &sent, "Review the copy".to_owned(), saved)
+            file_task(
+                &store,
+                &gone,
+                &sent,
+                "Review the copy".to_owned(),
+                None,
+                saved,
+            )
         });
         assert!(failed.is_err());
         assert_eq!(store.list_tasks(Some(&beta.id)).unwrap().len(), 1);
@@ -608,7 +673,14 @@ mod tests {
         gone.id = new_id();
         let todo = option(RoomChoiceKind::Todo, "todo");
         let failed = under_claim(&store, &card, "todo", |saved| {
-            file_task(&store, &gone, &todo, "Review the copy".to_owned(), saved)
+            file_task(
+                &store,
+                &gone,
+                &todo,
+                "Review the copy".to_owned(),
+                None,
+                saved,
+            )
         });
         assert!(failed.is_err(), "a team that is gone takes no task");
         assert_eq!(answer_of(&store, &card), None);
@@ -626,7 +698,14 @@ mod tests {
         );
 
         under_claim(&store, &card, "todo", |saved| {
-            file_task(&store, &alpha, &todo, "Review the copy".to_owned(), saved)
+            file_task(
+                &store,
+                &alpha,
+                &todo,
+                "Review the copy".to_owned(),
+                None,
+                saved,
+            )
         })
         .expect("the card is answered");
         assert_eq!(answer_of(&store, &card).as_deref(), Some("todo"));

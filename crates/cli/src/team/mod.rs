@@ -14,7 +14,8 @@ use crate::target::Target;
 use clap::{Args, Subcommand, ValueEnum};
 use massorca_client::Client;
 use massorca_protocol::methods::team_room::{
-    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomPostParams,
+    TeamRoomAnswerParams, TeamRoomListParams, TeamRoomMentionsParams, TeamRoomPostParams,
+    TeamRoomResolveParams,
 };
 use massorca_protocol::methods::teams::{
     Board, BoardParams, BotAddParams, BotRemoveParams, CodeSource, TeamAccess, TeamCharacter,
@@ -309,6 +310,11 @@ pub enum TeamRoomCommand {
         /// Make a reply to a bot's line a task instead of a conversation.
         #[arg(long, conflicts_with = "bot", requires = "reply_to")]
         task: bool,
+        /// Let one routing query, run with the default agent (agents.default_kind), place a line that names no bot or
+        /// team: a bot's task, another team's Todo, a conversation, or a choice card when it is unclear. The line
+        /// waits in the room until the query answers. Needs a host with team-room/4.
+        #[arg(long, conflicts_with_all = ["bot", "to", "ask", "reply_to"])]
+        route: bool,
     },
     /// Answers a choice card once: `bot:<id>` gives the request to that bot, `team:<id>` puts it in another team's
     /// Todo, and `todo` keeps it in this team's Todo with no bot. `team room list` prints each card's choices.
@@ -319,6 +325,29 @@ pub enum TeamRoomCommand {
         message: String,
         /// One of the card's choices.
         choice: String,
+    },
+    /// Lists what an @ typed so far can name in the room: the team's bots (@Name), the other teams (@team:Name), the
+    /// team's projects (@project:Name) and @file:. A QUERY starting with file: lists the files and folders of one folder
+    /// of the team's projects (file:src/ lists src). Needs a host with team-room/4.
+    Mentions {
+        /// Team id or name.
+        team: String,
+        /// The text after the @ typed so far.
+        #[arg(default_value = "")]
+        query: String,
+        /// At most this many (20 without it, 100 at most).
+        #[arg(long, value_name = "N")]
+        limit: Option<u32>,
+    },
+    /// Shows what each mention of TEXT names, as a posted line reads it: @Name a bot of the team, @team:Name another
+    /// team, @project:Name a project of the team, @file:path a file inside a project's folder. A typed mention that
+    /// names nothing is refused (team.room_mention_unknown), and so is a file outside its project
+    /// (team.room_file_outside).
+    Resolve {
+        /// Team id or name.
+        team: String,
+        /// The line.
+        text: String,
     },
 }
 
@@ -740,7 +769,18 @@ async fn run_room(
             reply_to,
             ask,
             task,
+            route,
         } => {
+            if route && !client.has_capability(capabilities::TEAM_ROOM_ROUTING) {
+                return Err(CliError::new(
+                    codes::CAPABILITY_NOT_NEGOTIATED,
+                    format!(
+                        "this service does not offer {}, so it cannot route a line; update MassOrca on the host",
+                        capabilities::TEAM_ROOM_ROUTING
+                    ),
+                    exit::ERROR,
+                ));
+            }
             // An older host ignores both and makes a task, so they need a host that answers in the room.
             if (ask || reply_to.is_some())
                 && !client.has_capability(capabilities::TEAM_ROOM_REPLIES)
@@ -771,6 +811,7 @@ async fn run_room(
                     } else {
                         task.then_some(false)
                     },
+                    route: route.then_some(true),
                 })
                 .await?;
             output.success(&posted, &text::room_lines(&posted.messages));
@@ -790,6 +831,18 @@ async fn run_room(
             let mut lines = text::room_lines(std::slice::from_ref(&answered.card));
             lines.extend(text::room_lines(&answered.messages));
             output.success(&answered, &lines);
+        }
+        TeamRoomCommand::Mentions { team, query, limit } => {
+            let mentions = client
+                .team_room_mentions(&TeamRoomMentionsParams { team, query, limit })
+                .await?;
+            output.success(&mentions, &text::mention_lines(&mentions.mentions));
+        }
+        TeamRoomCommand::Resolve { team, text } => {
+            let mentions = client
+                .team_room_resolve(&TeamRoomResolveParams { team, text })
+                .await?;
+            output.success(&mentions, &text::mention_lines(&mentions.mentions));
         }
     }
     Ok(())

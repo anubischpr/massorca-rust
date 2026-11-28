@@ -1,5 +1,6 @@
 //! The Conference room of a team (capability `team-room/1`, decision 0102): the lines a person and the team's bots
 //! post, and the task a person's line becomes. `team-room/3` adds conversation replies and the typing line (decision 0122).
+//! `team-room/4` adds request routing and typed mentions (AUTO-13, decision 0121).
 
 use std::fmt;
 
@@ -14,6 +15,11 @@ pub const ROOM_LIST: &str = "team.room_list";
 pub const ROOM_POST: &str = "team.room_post";
 /// Params: [`TeamRoomAnswerParams`]. Result: [`TeamRoomAnswered`]. Answers a choice card once (decision 0121).
 pub const ROOM_ANSWER: &str = "team.room_answer";
+/// Params: [`TeamRoomMentionsParams`]. Result: [`RoomMentions`]. What an `@` typed so far can name (AUTO-13).
+pub const ROOM_MENTIONS: &str = "team.room_mentions";
+/// Params: [`TeamRoomResolveParams`]. Result: [`RoomMentions`]. What each mention of a line names; an unknown one is
+/// refused with `team.room_mention_unknown` (AUTO-13).
+pub const ROOM_RESOLVE: &str = "team.room_resolve";
 
 /// Who wrote a room line. A value this build does not know decodes as `Unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +170,10 @@ pub struct TeamRoomPostParams {
     /// line is a conversation and any other line is a task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask: Option<bool>,
+    /// `true` lets the routing query place a person's line that names no bot, team or receiver: a bot, another team,
+    /// a conversation, or a choice card when it is unclear (AUTO-13). An older host ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<bool>,
 }
 
 impl fmt::Debug for TeamRoomPostParams {
@@ -176,6 +186,7 @@ impl fmt::Debug for TeamRoomPostParams {
             .field("start", &self.start)
             .field("reply_to", &self.reply_to)
             .field("ask", &self.ask)
+            .field("route", &self.route)
             .field("session", &self.session)
             .field(
                 "agent_token",
@@ -209,6 +220,23 @@ pub struct TeamRoomAnswered {
     pub messages: Vec<TeamRoomMessage>,
 }
 
+/// What a mention names. A value this build does not know decodes as `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMentionKind {
+    /// A bot of this team: `@Name`.
+    Bot,
+    /// Another team: `@team:Name`.
+    Team,
+    /// A project of this team: `@project:Name`.
+    Project,
+    /// A file inside a project of this team: `@file:path/in/project`.
+    File,
+    /// A value from a newer peer that this build does not know; never sent by this build.
+    #[serde(other)]
+    Unknown,
+}
+
 /// Params: [`TeamMessageSendParams`]. Result: [`TeamMessageSent`]. Called by a bot's run (capability `team-messages/1`).
 pub const MESSAGE_SEND: &str = "team.message_send";
 /// Params: [`TeamMessageReplyParams`]. Result: [`TeamMessageSent`]. Answers a message in the caller's inbox.
@@ -235,6 +263,47 @@ pub enum MessageType {
     /// A value from a newer peer that this build does not know; never sent by this build.
     #[serde(other)]
     Unknown,
+}
+
+/// One mention: what it names and the text that names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomMention {
+    pub kind: RoomMentionKind,
+    /// The bot's, team's or project's id; for a file, its path inside its project, with `/` separators.
+    pub id: String,
+    /// The name a person reads; for a file, its path.
+    pub label: String,
+    /// The text that names it in a line, such as `@team:Design`.
+    pub insert: String,
+    /// The project a file is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// Params of `team.room_mentions`: what `query` (the text after an `@`, without it) can name, at most `limit` (20
+/// without it). A query starting with `file:` lists files and folders of the team's projects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRoomMentionsParams {
+    /// Team id or exact name.
+    pub team: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Params of `team.room_resolve`: the mentions of `text` as a room line would read them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRoomResolveParams {
+    /// Team id or exact name.
+    pub team: String,
+    pub text: String,
+}
+
+/// Result of `team.room_mentions` and `team.room_resolve`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomMentions {
+    pub mentions: Vec<RoomMention>,
 }
 
 /// How soon a message wants its reader. `high` and `urgent` wake a live parent run.
@@ -468,6 +537,7 @@ mod tests {
             start: None,
             reply_to: None,
             ask: None,
+            route: None,
         };
         let wire = serde_json::to_value(&params).unwrap();
         assert_eq!(
@@ -476,5 +546,22 @@ mod tests {
         );
         params.agent_token = Some("run-secret".to_owned());
         assert!(!format!("{params:?}").contains("run-secret"));
+        params.route = Some(true);
+        assert_eq!(serde_json::to_value(&params).unwrap()["route"], true);
+    }
+
+    #[test]
+    fn a_mention_kind_from_a_newer_peer_decodes_as_unknown_and_a_file_keeps_its_project() {
+        let kind: RoomMentionKind = serde_json::from_str("\"channel\"").unwrap();
+        assert_eq!(kind, RoomMentionKind::Unknown);
+        let mention: RoomMention = serde_json::from_value(serde_json::json!({
+            "kind": "file", "id": "src/lib.rs", "label": "src/lib.rs", "insert": "@file:src/lib.rs",
+            "project": "Parser"
+        }))
+        .unwrap();
+        assert_eq!(mention.project.as_deref(), Some("Parser"));
+        let params: TeamRoomMentionsParams =
+            serde_json::from_value(serde_json::json!({"team": "alpha"})).unwrap();
+        assert_eq!((params.query.as_str(), params.limit), ("", None));
     }
 }

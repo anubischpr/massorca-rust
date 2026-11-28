@@ -25,6 +25,7 @@ fn post(text: &str, bot: Option<&str>) -> TeamRoomPostParams {
         start: None,
         reply_to: None,
         ask: None,
+        route: None,
     }
 }
 
