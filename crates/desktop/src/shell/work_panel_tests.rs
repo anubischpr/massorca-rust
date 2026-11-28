@@ -599,3 +599,32 @@ fn a_refused_attach_says_why_and_draws_no_pane(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn a_new_terminal_starts_the_shell_the_settings_name_and_the_host_default_when_empty(
+    cx: &mut TestAppContext,
+) {
+    let (mut rig, cx) = start_page(cx);
+    let shell_setting = |value: &str| {
+        StoreUpdate::ConfigChanged(massorca_protocol::methods::config::ConfigValue {
+            owner: "core".into(),
+            key: "terminal.shell".into(),
+            value: value.into(),
+            ..Default::default()
+        })
+    };
+    rig.updates
+        .send(shell_setting(" pwsh "))
+        .expect("the store listens");
+    cx.run_until_parked();
+
+    let (params, _reply) = start_terminal_create(&mut rig, cx);
+
+    assert_eq!(
+        params.shell,
+        Some(massorca_protocol::methods::terminals::ShellSpec {
+            program: "pwsh".into(),
+            args: Vec::new(),
+        })
+    );
+}

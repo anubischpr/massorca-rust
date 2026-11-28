@@ -182,6 +182,10 @@ pub(crate) enum Command {
         params: ConfigSet,
         reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
     },
+    ResetConfig {
+        params: ConfigKey,
+        reply: oneshot::Sender<Result<ConfigValue, Refusal>>,
+    },
     /// `agent.mark_seen`, answered on its oneshot; the store follows the service's `agent.changed` event.
     MarkSeen {
         params: AgentMarkSeenParams,
@@ -555,6 +559,13 @@ impl ServiceHandle {
     /// and the caller shows "Saved" only from that answer.
     pub async fn config_set(&self, params: ConfigSet) -> Result<ConfigValue, Refusal> {
         self.ask(|reply| Command::SetConfig { params, reply }).await
+    }
+
+    /// `config.reset`: the service drops the stored value. The answer is the default now in effect, which the store
+    /// takes as the change event will say too.
+    pub async fn config_reset(&self, params: ConfigKey) -> Result<ConfigValue, Refusal> {
+        self.ask(|reply| Command::ResetConfig { params, reply })
+            .await
     }
 
     /// `device.list` on this computer's service. The store's device list follows the answer too.
@@ -1201,10 +1212,15 @@ impl Link {
                 secrets::refresh_in_background(client, &self.updates, &self.secrets_order);
                 return Outcome::Continue;
             }
+            // The event names the kind; its whole account list is read again. The kinds are read again too: an account
+            // change moves a kind's `imported` mark, and a background model listing is announced under this topic so a
+            // model choice shows its versioned label (decision 0166, amendment).
             TOPIC_ACCOUNTS_CHANGED => {
-                // The event names the kind; its whole list is read again.
                 accounts::refresh_in_background(client, &id, &self.updates, &self.accounts_order);
-                return Outcome::Continue;
+                agents::list_kinds(client).await.map(|kinds| {
+                    self.emit(StoreUpdate::AgentKindChatResync(kind_chats(&kinds)));
+                    StoreUpdate::AgentKindsResync(kinds)
+                })
             }
             // A rename or comment change is read again too: the event names the workspace, not its name.
             TOPIC_WORKSPACE_CREATED | TOPIC_WORKSPACE_UPDATED | TOPIC_WORKSPACE_REMOVING => client
@@ -1445,6 +1461,19 @@ fn spawn_call(
                 let _ = reply.send(result);
             });
         }
+        Command::ResetConfig { params, reply } => {
+            let updates = updates.clone();
+            tokio::spawn(async move {
+                let result = client
+                    .config_reset(&params)
+                    .await
+                    .map_err(|error| Refusal::from(&error));
+                if let Ok(value) = &result {
+                    let _ = updates.send(StoreUpdate::ConfigChanged(value.clone()));
+                }
+                let _ = reply.send(result);
+            });
+        }
         Command::ListDevices { reply } => {
             let updates = updates.clone();
             tokio::spawn(async move {
@@ -1609,7 +1638,7 @@ fn refuse_while_down(command: Command) {
         Command::ListConfig { reply } => {
             let _ = reply.send(Err(refusal));
         }
-        Command::SetConfig { reply, .. } => {
+        Command::SetConfig { reply, .. } | Command::ResetConfig { reply, .. } => {
             let _ = reply.send(Err(refusal));
         }
         Command::Team(command) => teams::refuse(command, refusal),

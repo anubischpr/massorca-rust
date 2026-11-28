@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use tracing::warn;
 
 use crate::backup::BackupLabel;
@@ -48,6 +48,40 @@ pub(crate) fn apply_pending(
         observe("store schema step");
     }
     Ok(())
+}
+
+/// Applies and records every file step inside `transaction`, which is building a new database. Each step runs under a
+/// savepoint: a failing one is rolled back alone and returned, so the caller commits the steps before it, as one
+/// transaction per step would. Does nothing when a step needs foreign keys switched off, which cannot change inside a
+/// transaction: `apply_pending` runs them all then.
+pub(crate) fn apply_all_in(
+    transaction: &Transaction<'_>,
+    steps: &[FileMigration],
+) -> Result<Option<StoreError>, StoreError> {
+    if steps.is_empty() || steps.iter().any(|step| step.foreign_keys_off) {
+        return Ok(None);
+    }
+    transaction.execute_batch(CREATE_TRACKING_TABLE)?;
+    let mut ordered: Vec<&FileMigration> = steps.iter().collect();
+    ordered.sort_by_key(|step| step.id);
+    let applied_at = crate::now_ms();
+    for step in ordered {
+        transaction.execute_batch("SAVEPOINT file_step")?;
+        let applied = transaction.execute_batch(step.sql).and_then(|()| {
+            transaction.execute(
+                "INSERT INTO store_migrations (id, applied_at) VALUES (?1, ?2)",
+                params![step.id, applied_at],
+            )
+        });
+        match applied {
+            Ok(_) => transaction.execute_batch("RELEASE file_step")?,
+            Err(error) => {
+                transaction.execute_batch("ROLLBACK TO file_step; RELEASE file_step")?;
+                return Ok(Some(error.into()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
