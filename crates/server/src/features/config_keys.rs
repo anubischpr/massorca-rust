@@ -262,7 +262,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let settings = core_settings(root);
-        assert_eq!(settings.len(), 33);
+        assert_eq!(settings.len(), 34);
         let mut keys = HashSet::new();
         for decl in &settings {
             assert!(
