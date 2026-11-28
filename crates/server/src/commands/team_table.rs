@@ -440,5 +440,11 @@ pub fn team_commands() -> Vec<CommandDescriptor> {
                 }
             }),
         ),
+        command(
+            "team.delegation.list",
+            "List a team's delegated tasks",
+            "team.delegation_list",
+            selector("team"),
+        ),
     ]
 }
