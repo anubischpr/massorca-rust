@@ -156,3 +156,68 @@ fn skills_place_refuses_an_agent_the_cli_does_not_know() {
         )
         .failure();
 }
+
+#[test]
+fn skills_agents_adds_one_agent_and_drops_another_and_reports_each_as_json() {
+    let sandbox = sandbox_with_notes();
+    let id = notes_id(&sandbox);
+    let user_home = sandbox.home().join("user-home");
+    sandbox.json_ok(
+        "default",
+        &["skills", "place", id.as_str(), "--agent", "gemini"],
+    );
+
+    let switched = sandbox.json_ok(
+        "default",
+        &[
+            "skills", "agents", "notes", "--add", "cursor", "--drop", "gemini",
+        ],
+    );
+
+    assert_eq!(state_of(&switched, "cursor"), "placed", "{switched}");
+    assert_eq!(state_of(&switched, "gemini"), "removed", "{switched}");
+    assert!(user_home.join(".cursor/skills/notes/SKILL.md").is_file());
+    assert!(!user_home.join(".gemini/skills/notes").exists());
+    assert!(
+        user_home.join(".agents/skills/notes/SKILL.md").is_file(),
+        "the canonical copy stays while the cursor alias reaches it"
+    );
+}
+
+#[test]
+fn skills_place_and_agents_name_their_workspace_and_add_and_drop_flags_in_help() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .run("default", &["skills", "place", "--help"])
+        .success()
+        .stdout(contains("--workspace"));
+    sandbox
+        .run("default", &["skills", "agents", "--help"])
+        .success()
+        .stdout(contains("--add"))
+        .stdout(contains("--drop"));
+}
+
+#[test]
+fn skills_place_into_a_workspace_the_service_does_not_know_is_refused() {
+    let sandbox = sandbox_with_notes();
+    let id = notes_id(&sandbox);
+    let user_home = sandbox.home().join("user-home");
+
+    sandbox
+        .run(
+            "default",
+            &[
+                "skills",
+                "place",
+                id.as_str(),
+                "--agent",
+                "cursor",
+                "--workspace",
+                "ws-not-here",
+            ],
+        )
+        .failure()
+        .stderr(contains("workspace"));
+    assert!(!user_home.join(".cursor").exists());
+}

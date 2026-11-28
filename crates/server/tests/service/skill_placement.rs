@@ -10,8 +10,9 @@ use massorca_protocol::capabilities;
 use massorca_protocol::codes;
 use massorca_protocol::methods::projects::{self, ProjectAddParams};
 use massorca_protocol::methods::skill_placement::{
-    self as placement, AgentPlacement, PlacementAgent, PlacementState, SkillPlaceParams,
-    SkillPlacementResult, SkillUnplaceParams, SkillsManagedParams, SkillsManagedResult,
+    self as placement, AgentPlacement, PlacementAgent, PlacementScope, PlacementState,
+    PlacementTarget, SkillAgentsParams, SkillPlaceParams, SkillPlacementResult, SkillUnplaceParams,
+    SkillsManagedParams, SkillsManagedResult,
 };
 use massorca_protocol::methods::skills::{self, SkillDiscovery, SkillsDiscoverParams};
 use massorca_server::DiscoveryOptions;
@@ -340,4 +341,248 @@ async fn a_preview_reuses_the_recent_scan_instead_of_forcing_a_new_one() {
     );
     drop(client);
     stop(running).await;
+}
+
+/// A git project whose workspace `feature` is a worktree under `home`, and its id and folder.
+async fn workspace_feature(
+    client: &massorca_client::Client,
+    home: &Path,
+) -> (String, std::path::PathBuf) {
+    let repo = home.join("repo");
+    super::workspaces::git_repo(&repo);
+    let project = super::workspaces::add_repo_project(client, home, &repo).await;
+    let created: massorca_protocol::methods::workspaces::Workspace = client
+        .call(
+            massorca_protocol::methods::workspaces::CREATE,
+            &super::workspaces::create_params(&project.name, "feature"),
+        )
+        .await
+        .expect("the workspace is created");
+    (created.id, std::path::PathBuf::from(created.path))
+}
+
+#[tokio::test]
+async fn a_workspace_placement_lives_under_the_workspace_folder_and_not_the_global_one() {
+    let profile_home = temp_home();
+    let fake = TempDir::new().expect("a temporary folder");
+    let user_home = fake.path().join("user-home");
+    skill_at(&user_home, ".claude/skills", "notes");
+    let running =
+        start_with_discovery(profile_home.path(), "default", discovery_of(&user_home)).await;
+    let client = connect(profile_home.path(), "default").await;
+    let skill_id = discovered_id(&client, "notes").await;
+    let (workspace_id, workspace) = workspace_feature(&client, fake.path()).await;
+    let target = PlacementTarget {
+        scope: PlacementScope::Workspace,
+        workspace_id: Some(workspace_id.clone()),
+    };
+    let params = SkillPlaceParams {
+        skill_id,
+        agents: vec![PlacementAgent::Cursor],
+        target: target.clone(),
+    };
+
+    let placed: SkillPlacementResult = client
+        .call(placement::PLACE, &params)
+        .await
+        .expect("placed for the workspace");
+
+    assert_eq!(
+        state_of(&placed, PlacementAgent::Cursor),
+        PlacementState::Placed
+    );
+    assert!(workspace.join(".agents/skills/notes/SKILL.md").is_file());
+    assert!(workspace.join(".cursor/skills/notes/SKILL.md").is_file());
+    assert!(
+        !user_home.join(".agents").exists(),
+        "the global root is not written"
+    );
+    let managed: SkillsManagedResult = client
+        .call(placement::MANAGED, &SkillsManagedParams::default())
+        .await
+        .expect("listed");
+    assert_eq!(managed.skills.len(), 1);
+    assert_eq!(managed.skills[0].workspace_id, Some(workspace_id));
+
+    let removed: SkillPlacementResult = client
+        .call(
+            placement::UNPLACE,
+            &SkillUnplaceParams {
+                name: "notes".to_owned(),
+                agents: Vec::new(),
+                target,
+            },
+        )
+        .await
+        .expect("removed from the workspace");
+    assert_eq!(
+        state_of(&removed, PlacementAgent::Cursor),
+        PlacementState::Removed
+    );
+    assert!(!workspace.join(".cursor/skills/notes").exists());
+    drop(client);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn a_scope_that_names_no_workspace_or_an_unknown_one_is_refused_with_its_code() {
+    let profile_home = temp_home();
+    let fake = TempDir::new().expect("a temporary folder");
+    let user_home = fake.path().join("user-home");
+    skill_at(&user_home, ".claude/skills", "notes");
+    let running =
+        start_with_discovery(profile_home.path(), "default", discovery_of(&user_home)).await;
+    let client = connect(profile_home.path(), "default").await;
+    let skill_id = discovered_id(&client, "notes").await;
+    let place = |target: PlacementTarget| SkillPlaceParams {
+        skill_id: skill_id.clone(),
+        agents: vec![PlacementAgent::Cursor],
+        target,
+    };
+
+    let unknown_workspace = client
+        .call::<_, SkillPlacementResult>(
+            placement::PLACE,
+            &place(PlacementTarget {
+                scope: PlacementScope::Workspace,
+                workspace_id: Some("ws-that-is-not-here".to_owned()),
+            }),
+        )
+        .await
+        .expect_err("the workspace is unknown");
+    assert_eq!(remote_code(&unknown_workspace), codes::WORKSPACE_NOT_FOUND);
+
+    let no_workspace = client
+        .call::<_, SkillPlacementResult>(
+            placement::PLACE,
+            &place(PlacementTarget {
+                scope: PlacementScope::Workspace,
+                workspace_id: None,
+            }),
+        )
+        .await
+        .expect_err("a workspace scope names its workspace");
+    assert_eq!(remote_code(&no_workspace), codes::REQUEST_INVALID_PARAMS);
+
+    let global_with_workspace = client
+        .call::<_, SkillPlacementResult>(
+            placement::PLACE,
+            &place(PlacementTarget {
+                scope: PlacementScope::Global,
+                workspace_id: Some("ws".to_owned()),
+            }),
+        )
+        .await
+        .expect_err("a global placement names no workspace");
+    assert_eq!(
+        remote_code(&global_with_workspace),
+        codes::REQUEST_INVALID_PARAMS
+    );
+
+    let newer_scope = client
+        .call::<_, SkillPlacementResult>(
+            placement::PLACE,
+            &place(PlacementTarget {
+                scope: PlacementScope::Unknown,
+                workspace_id: None,
+            }),
+        )
+        .await
+        .expect_err("a scope this build does not know is refused");
+    assert_eq!(remote_code(&newer_scope), codes::REQUEST_INVALID_PARAMS);
+    assert!(
+        !user_home.join(".cursor").exists(),
+        "nothing is written for a refused scope"
+    );
+    drop(client);
+    stop(running).await;
+}
+
+#[tokio::test]
+async fn the_agent_switch_adds_one_agent_and_drops_another_without_re_placing_the_rest() {
+    let profile_home = temp_home();
+    let fake = TempDir::new().expect("a temporary folder");
+    let user_home = fake.path().join("user-home");
+    skill_at(&user_home, ".claude/skills", "notes");
+    let running =
+        start_with_discovery(profile_home.path(), "default", discovery_of(&user_home)).await;
+    let client = connect(profile_home.path(), "default").await;
+    let skill_id = discovered_id(&client, "notes").await;
+    let params = SkillPlaceParams {
+        skill_id,
+        agents: vec![PlacementAgent::Codex, PlacementAgent::Gemini],
+        target: PlacementTarget::default(),
+    };
+    let _placed: SkillPlacementResult = client
+        .call(placement::PLACE, &params)
+        .await
+        .expect("placed");
+
+    let switch = SkillAgentsParams {
+        name: "notes".to_owned(),
+        add: vec![PlacementAgent::Cursor],
+        drop: vec![PlacementAgent::Gemini],
+        target: PlacementTarget::default(),
+    };
+    let switched: SkillPlacementResult = client
+        .call(placement::AGENTS, &switch)
+        .await
+        .expect("switched");
+
+    assert_eq!(
+        state_of(&switched, PlacementAgent::Cursor),
+        PlacementState::Placed
+    );
+    assert_eq!(
+        state_of(&switched, PlacementAgent::Gemini),
+        PlacementState::Removed
+    );
+    assert!(!user_home.join(".gemini/skills/notes").exists());
+    assert!(user_home.join(".cursor/skills/notes/SKILL.md").is_file());
+    assert!(
+        user_home.join(".agents/skills/notes/SKILL.md").is_file(),
+        "the canonical copy stays while codex reads it"
+    );
+    let managed: SkillsManagedResult = client
+        .call(placement::MANAGED, &SkillsManagedParams::default())
+        .await
+        .expect("listed");
+    let mut agents: Vec<PlacementAgent> = managed.skills[0]
+        .agents
+        .iter()
+        .map(|row| row.agent)
+        .collect();
+    agents.sort_by_key(|agent| format!("{agent:?}"));
+    assert_eq!(agents, [PlacementAgent::Codex, PlacementAgent::Cursor]);
+
+    let empty = client
+        .call::<_, SkillPlacementResult>(
+            placement::AGENTS,
+            &SkillAgentsParams {
+                name: "notes".to_owned(),
+                add: Vec::new(),
+                drop: Vec::new(),
+                target: PlacementTarget::default(),
+            },
+        )
+        .await
+        .expect_err("a switch names an agent");
+    assert_eq!(remote_code(&empty), codes::REQUEST_INVALID_PARAMS);
+    drop(client);
+    stop(running).await;
+}
+
+/// The id discovery gives the home skill `name`.
+async fn discovered_id(client: &massorca_client::Client, name: &str) -> String {
+    let discovery: SkillDiscovery = client
+        .call(skills::DISCOVER, &SkillsDiscoverParams::default())
+        .await
+        .expect("discovery answers");
+    discovery
+        .skills
+        .iter()
+        .find(|skill| skill.name == name)
+        .expect("the home skill")
+        .id
+        .clone()
 }
