@@ -598,6 +598,13 @@ mod tests {
     ) -> std::path::PathBuf {
         let program = profile.join(format!("fake-chat-cli{}", std::env::consts::EXE_SUFFIX));
         fs::write(&program, b"not run: a stand-in answers").expect("the program file");
+        // Program discovery takes only an executable file on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+                .expect("make the program file executable");
+        }
         let runner = only(&program, runner);
         let kinds = paths::kinds_dir(profile);
         fs::create_dir_all(&kinds).expect("create the kinds directory");
