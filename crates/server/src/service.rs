@@ -367,6 +367,7 @@ impl Service {
             started_at_ms,
             activity: Activity::default(),
             first_prompt_titles: Default::default(),
+            usage: Arc::default(),
         });
         let _ = first_prompt_state.set(Arc::downgrade(&state));
         // Subscribed before the first request is served, so no agent change is missed (decision 0072).
@@ -399,6 +400,7 @@ impl Service {
             Arc::clone(&state),
             signal.clone(),
         ));
+        let usage_stop = tokio::spawn(features::follow_usage(Arc::clone(&state), signal.clone()));
         let listeners = network::spawn_listeners(&network, acceptor, &state, &signal);
         let accept_state = Arc::clone(&state);
         let task = tokio::spawn(async move {
@@ -415,6 +417,7 @@ impl Service {
             let _ = outcomes_stop.await;
             let _ = routines_stop.await;
             let _ = automations_stop.await;
+            let _ = usage_stop.await;
         });
         timings.mark("serving");
         timings.report();
@@ -455,6 +458,15 @@ fn agent_listener(
                 events.publish(ChangeEvent {
                     topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
                     id: account.kind.clone(),
+                });
+                return;
+            }
+            // A background model listing is announced as an account change of its kind, the event a client reads the
+            // kinds again on (decision 0166, amendment); no session changed, so no watcher gets it.
+            Change::Models(kind) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
+                    id: kind.clone(),
                 });
                 return;
             }

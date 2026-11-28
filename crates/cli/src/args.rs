@@ -12,6 +12,7 @@ use crate::skills::SkillCommand;
 use crate::task::TaskCommand;
 use crate::team::TeamCommand;
 use crate::terminal::TerminalCommand;
+use crate::usage::UsageArgs;
 
 /// Runs and controls the MassOrca service and reads and changes its settings.
 #[derive(Debug, Parser)]
@@ -111,6 +112,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServerCommand,
     },
+    /// Shows each agent account's usage and limits, read on the host that runs the agents. Works with --host. Off until
+    /// the setting usage.enabled is on.
+    Usage(UsageArgs),
     /// Lists, checks, removes and discovers the hosts this client paired with, and installs new ones over SSH.
     Host {
         #[command(subcommand)]
