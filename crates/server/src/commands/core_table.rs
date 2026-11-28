@@ -148,6 +148,12 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
             }),
         ),
         command(
+            "project.init-git",
+            "Turn a folder project into a git project",
+            "project.init_git",
+            selector("project"),
+        ),
+        command(
             "project.rm",
             "Remove a project",
             "project.remove",
@@ -691,7 +697,8 @@ pub fn core_commands() -> Vec<CommandDescriptor> {
                     "remove_workspace": { "type": "boolean" },
                     "force": { "type": "boolean" },
                     "discard_ignored": { "type": "boolean" },
-                    "expect_dirty": { "type": "boolean" }
+                    "expect_dirty": { "type": "boolean" },
+                    "allow_failed_archive": { "type": "boolean" }
                 }
             }),
         ),

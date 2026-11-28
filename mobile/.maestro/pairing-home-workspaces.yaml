@@ -1,7 +1,7 @@
-# Screens 1, 2, 4 and 6 of the Android app (decision 0080, task A11), run by the android-emulator job in ci.yml against a
-# massorca service on the runner, which the emulator reaches at 10.0.2.2. The job makes the pairing offer and starts one
-# shell in the e2e-folder workspace (scripts/ci/start-massorca-service.sh). MASSORCA_PAIRING_OFFER is passed with -e and
-# is never printed.
+# Screens 1, 2, 4, 5 and 6 of the Android app (decision 0080, task A11), run by the android-emulator job in ci.yml against a
+# massorca service on the runner, which the emulator reaches at 10.0.2.2. The job makes the pairing offer, starts one
+# shell in the e2e-folder workspace and makes the e2e-team routine (scripts/ci/start-massorca-service.sh).
+# MASSORCA_PAIRING_OFFER is passed with -e and is never printed.
 appId: dev.massorca.app
 ---
 - launchApp:
@@ -32,8 +32,25 @@ appId: dev.massorca.app
 - extendedWaitUntil:
     visible: "e2e-folder, No Git"
     timeout: 60000
+# The No Git badge opens the folder's sheet, which says what a plain folder lacks. Not now closes it.
+- tapOn:
+    id: "no-git-badge"
+- extendedWaitUntil:
+    visible: "This folder is not a git repository"
+    timeout: 60000
+- tapOn: "Not now"
+# Screen 5: the Routines of the host list the e2e-team routine with its schedule and its bot. Back returns to Projects.
+- tapOn: "Routines"
+- extendedWaitUntil:
+    visible: "e2e-routine"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: ".*On day 28 of each month at 23:59, e2e-bot.*"
+    timeout: 60000
+- back
 # The workspace opens on its Changes view. Its Terminal view opens the workspace's only live terminal at once.
-- tapOn: "e2e-folder, No Git"
+# The middle of the row is the No Git badge, which would open the sheet again, so the folder's name is tapped.
+- tapOn: "^e2e-folder$"
 - tapOn:
     id: "workspace-view-terminal"
 # Screen 6: the shell's prompt shows once the terminal page is ready and attached. Until then the input takes no text.

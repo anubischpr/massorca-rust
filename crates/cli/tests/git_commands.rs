@@ -28,6 +28,37 @@ fn workspace(sandbox: &Sandbox) -> PathBuf {
 }
 
 #[test]
+fn git_branches_with_a_project_lists_its_checkout_with_no_workspace() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.home().join("repo");
+    git_repo(&repo);
+    let repo_text = repo.to_string_lossy().into_owned();
+    let root_text = sandbox.home().join("ws").to_string_lossy().into_owned();
+    sandbox.json_ok(
+        "default",
+        &[
+            "project",
+            "add",
+            &repo_text,
+            "--workspaces-root",
+            &root_text,
+        ],
+    );
+
+    let listed = sandbox.json_ok("default", &["git", "branches", "--project", "repo"]);
+    assert_eq!(listed["branches"][0]["current"], true);
+    assert_eq!(listed["branches"].as_array().expect("branches").len(), 1);
+    let text = sandbox
+        .run("default", &["git", "branches", "--project", "repo"])
+        .success();
+    assert!(
+        stdout_text(&text).starts_with("* "),
+        "{}",
+        stdout_text(&text)
+    );
+}
+
+#[test]
 fn status_reports_changes_as_json_and_text() {
     let sandbox = Sandbox::new();
     let dir = workspace(&sandbox);
@@ -556,4 +587,58 @@ fn patch_of_a_submodule_shows_its_pointer_in_text_and_json() {
     assert_eq!(json["submodule"]["summary"], summary);
     assert_eq!(json["submodule"]["dirty"], false);
     assert!(json.get("patch").is_none(), "{json}");
+}
+
+/// Adds a remote to the project's own repository, which every worktree of it shares.
+fn add_remote(repo: &std::path::Path, name: &str, url: &str) {
+    let output = massorca_process::command("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["remote", "add", name, url])
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn remotes_name_each_network_remote_and_a_fork_names_its_upstream() {
+    let sandbox = Sandbox::new();
+    workspace(&sandbox);
+    let repo = sandbox.home().join("repo");
+    add_remote(&repo, "origin", "https://github.com/acme/widgets.git");
+    add_remote(&repo, "upstream", "https://github.com/ops/widgets");
+    add_remote(&repo, "backup", "/srv/widgets.git");
+
+    let remotes = sandbox.json_ok("default", &["git", "remotes", "-w", "feature"]);
+    let entries = remotes["remotes"].as_array().expect("a list of remotes");
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["remote"].as_str().expect("a remote name"))
+        .collect();
+    assert_eq!(names, ["origin", "upstream"]);
+    assert_eq!(entries[0]["provider"], "github");
+    assert_eq!(entries[0]["owner"], "acme");
+    assert_eq!(entries[0]["repo"], "widgets");
+    assert_eq!(entries[0]["web_url"], "https://github.com/acme/widgets");
+    assert_eq!(entries[0]["primary"], true);
+    assert_eq!(entries[0]["fork_of"], "ops/widgets");
+    assert_eq!(entries[1]["primary"], false);
+
+    let text = sandbox
+        .run("default", &["git", "remotes", "--project", "repo"])
+        .success();
+    let text = stdout_text(&text);
+    assert!(
+        text.contains("origin  acme/widgets  on github.com (github)  primary  fork of ops/widgets"),
+        "{text}"
+    );
+    assert!(
+        text.contains("upstream  ops/widgets  on github.com (github)"),
+        "{text}"
+    );
+    assert!(!text.contains("backup"), "{text}");
 }

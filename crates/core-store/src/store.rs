@@ -175,6 +175,7 @@ mod tests {
         let path = dir.path().join("store.db");
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();
+        // The frozen list and the migration files are built in one step, with one commit.
         assert_eq!(
             parts,
             [
@@ -184,6 +185,17 @@ mod tests {
                 "store wal"
             ],
             "a new database is built in one step"
+        );
+        let recorded: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM store_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            usize::try_from(recorded).unwrap(),
+            super::FILE_MIGRATIONS.len(),
+            "every migration file is recorded as applied"
         );
         let mut parts = Vec::new();
         super::Store::open_observed(&path, |part| parts.push(part)).unwrap();

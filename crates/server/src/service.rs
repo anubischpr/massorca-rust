@@ -454,6 +454,15 @@ fn agent_listener(
                 });
                 return;
             }
+            // A background model listing is announced as an account change of its kind, the event a client reads the
+            // kinds again on (decision 0166, amendment); no session changed, so no watcher gets it.
+            Change::Models(kind) => {
+                events.publish(ChangeEvent {
+                    topic: TOPIC_ACCOUNTS_CHANGED.to_owned(),
+                    id: kind.clone(),
+                });
+                return;
+            }
             // A queue change is announced under its session; no session record changed, so no watcher gets it (0084).
             Change::Queue(session) => {
                 events.publish(ChangeEvent {
