@@ -22,12 +22,11 @@ async fn next(stream: &mut Subscription) -> GitWatchEvent {
         .expect("the item decodes")
 }
 
-/// Items until one names `kind`, within the overall wait of `next`.
-async fn until_kind(stream: &mut Subscription, kind: WatchKind) {
-    loop {
-        if next(stream).await.kinds.contains(&kind) {
-            return;
-        }
+/// Items until every kind in `wanted` has been reported, whichever bursts carry them.
+async fn until_kinds(stream: &mut Subscription, wanted: &[WatchKind]) {
+    let mut seen = Vec::new();
+    while !wanted.iter().all(|kind| seen.contains(kind)) {
+        seen.extend(next(stream).await.kinds);
     }
 }
 
@@ -137,7 +136,10 @@ async fn refresh_fetches_the_base_from_its_bare_remote_before_the_rebase() {
     );
     git(&repo, &["remote", "add", "origin", utf8(&remote)]);
     // Full ref names, so the pushes and the clone below do not depend on the machine's default branch name.
-    git(&repo, &["push", "-q", "origin", "refs/heads/main:refs/heads/main"]);
+    git(
+        &repo,
+        &["push", "-q", "origin", "refs/heads/main:refs/heads/main"],
+    );
     let project = service.workspace.project_id.clone();
     let later: Workspace = service
         .client
@@ -172,7 +174,10 @@ async fn refresh_fetches_the_base_from_its_bare_remote_before_the_rebase() {
     std::fs::write(other.join("remote.txt"), "remote\n").expect("write file");
     git(&other, &["add", "remote.txt"]);
     git(&other, &["commit", "-q", "-m", "remote moves on"]);
-    git(&other, &["push", "-q", "origin", "refs/heads/main:refs/heads/main"]);
+    git(
+        &other,
+        &["push", "-q", "origin", "refs/heads/main:refs/heads/main"],
+    );
     let remote_tip = git(&other, &["rev-parse", "HEAD"]).trim().to_owned();
 
     let without_refresh = service
@@ -219,7 +224,7 @@ async fn a_rebase_reaches_the_git_watch_stream_as_head_and_refs_changes() {
         .expect("watch");
     let ready = next(&mut stream).await;
     assert!(ready.ready && !ready.degraded, "{ready:?}");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // `ready` is sent once the watchers are armed, so the rebase needs no wait before it.
 
     let rebased = service
         .client
@@ -228,7 +233,39 @@ async fn a_rebase_reaches_the_git_watch_stream_as_head_and_refs_changes() {
         .expect("rebase runs");
     assert!(matches!(rebased, GitRebased::Rebased { .. }), "{rebased:?}");
 
-    until_kind(&mut stream, WatchKind::Head).await;
-    until_kind(&mut stream, WatchKind::Refs).await;
+    until_kinds(&mut stream, &[WatchKind::Head, WatchKind::Refs]).await;
+    service.stop().await;
+}
+
+#[tokio::test]
+async fn an_in_place_checkout_is_refused_as_the_main_worktree() {
+    let service = GitService::start().await;
+    let in_place: Workspace = service
+        .client
+        .call(
+            workspaces::CREATE,
+            &WorkspaceCreateParams {
+                project: service.workspace.project_id.clone(),
+                name: String::new(),
+                branch: None,
+                base: None,
+                existing_branch: false,
+                refresh_base: false,
+                path: None,
+                request_id: None,
+                no_setup: false,
+                unique_name: false,
+                name_generated: false,
+                in_place: true,
+            },
+        )
+        .await
+        .expect("register the project's checkout in place");
+    let refused = service
+        .client
+        .git_rebase_base(&params(&in_place.id, false))
+        .await
+        .expect_err("an in-place checkout is never rebased");
+    assert_eq!(remote_code(&refused), codes::WORKSPACE_MAIN_WORKTREE);
     service.stop().await;
 }
