@@ -118,6 +118,8 @@ pub struct Composer {
     attach_offered: bool,
     /// Whether the model picker chip is offered.
     model_picker_offered: bool,
+    /// A caption before the model chip, such as options waiting for the next resume.
+    model_note: Option<SharedString>,
     /// Whether a message sent while the agent runs queues behind its turn.
     queueing_offered: bool,
     primary_focus: FocusHandle,
@@ -193,6 +195,7 @@ impl Composer {
             voice: true,
             attach_offered: true,
             model_picker_offered: true,
+            model_note: None,
             queueing_offered: true,
             primary_focus: cx.focus_handle().tab_stop(true),
             access_focus: cx.focus_handle().tab_stop(true),
@@ -406,6 +409,55 @@ impl Composer {
         cx.notify();
     }
 
+    /// Shows `choice` on the picker without telling the owner, as a session's options change on the service. The
+    /// choice stays while it already shows.
+    pub fn set_picker_choice(&mut self, choice: Choice, cx: &mut Context<Self>) {
+        let (agents, favourites, none_installed, fast_reason) = {
+            let state = self.picker.read(cx).state();
+            if *state.choice() == choice {
+                return;
+            }
+            (
+                state.agents().to_vec(),
+                state.favourites().to_vec(),
+                state.no_agents_installed(),
+                state.fast_reason().cloned(),
+            )
+        };
+        let mut state = PickerState::new(agents, choice).with_favourites(favourites);
+        state.set_no_agents_installed(none_installed);
+        state.set_fast_reason(fast_reason);
+        self.picker = cx.new(|cx| ModelPicker::new(state, cx));
+        self._picker_events = Self::subscribe_picker(&self.picker, cx);
+        cx.notify();
+    }
+
+    /// Whether the model chip is offered, for an owner whose offer changes after the composer is built.
+    pub fn set_model_picker_offered(&mut self, offered: bool, cx: &mut Context<Self>) {
+        if self.model_picker_offered != offered {
+            self.model_picker_offered = offered;
+            cx.notify();
+        }
+    }
+
+    /// Whether the model chip is offered now.
+    pub fn model_picker_offered(&self) -> bool {
+        self.model_picker_offered
+    }
+
+    /// The caption before the model chip.
+    pub fn model_note(&self) -> Option<&SharedString> {
+        self.model_note.as_ref()
+    }
+
+    /// Sets the caption before the model chip.
+    pub fn set_model_note(&mut self, note: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.model_note != note {
+            self.model_note = note;
+            cx.notify();
+        }
+    }
+
     /// Why Fast is off on every model while the service does not offer it; see `ModelPicker::set_fast_reason`.
     pub fn set_picker_fast_reason(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
         self.picker
@@ -594,6 +646,48 @@ mod tests {
 
     fn draft_of(composer: &Entity<Composer>, cx: &VisualTestContext) -> String {
         composer.read_with(cx, |composer, cx| composer.draft(cx))
+    }
+
+    #[gpui::test]
+    fn the_model_note_draws_beside_the_chip_only_while_the_chip_is_offered(
+        cx: &mut TestAppContext,
+    ) {
+        let (composer, cx) = composer_in(cx);
+        composer.update(cx, |composer, cx| {
+            composer.set_model_note(Some("Effort applies when the session resumes".into()), cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("composer-model-note").is_some(), "drawn");
+
+        composer.update(cx, |composer, cx| {
+            composer.set_model_picker_offered(false, cx)
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("composer-model-note").is_none(),
+            "no chip, no note"
+        );
+    }
+
+    #[gpui::test]
+    fn an_owner_set_choice_shows_without_a_model_changed_event(cx: &mut TestAppContext) {
+        let (composer, cx) = composer_in(cx);
+        let events = record(&composer, cx);
+        let shown = Choice {
+            model: "opus".into(),
+            effort: Some(0),
+            fast: false,
+        };
+        composer.update(cx, |composer, cx| {
+            composer.set_picker_choice(shown.clone(), cx)
+        });
+        cx.run_until_parked();
+
+        let choice = composer.read_with(cx, |composer, cx| {
+            composer.picker().read(cx).state().choice().clone()
+        });
+        assert_eq!(choice, shown);
+        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
     }
 
     #[gpui::test]
