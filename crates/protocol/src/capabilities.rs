@@ -67,6 +67,9 @@ pub const AGENT_PROMPT_ATTACHMENTS: &str = "agent-prompt-attachments/1";
 /// `agent.set_options` (decision 0171): a session's `model`, `effort` and `fast` change while it runs, typed into the run
 /// where its kind declares a live command for them, and kept for the session's next resume otherwise.
 pub const AGENT_OPTIONS_LIVE: &str = "agent-options-live/1";
+/// `agent.settings.get`, `agent.settings.set` and `agent.settings.clear` (decision 0174): a kind's standing program,
+/// arguments and environment, applied to every terminal and chat run of the kind.
+pub const AGENT_SETTINGS: &str = "agent-settings/1";
 /// `fast` on `agent.start` and `fast` on the kinds, models and sessions (decision 0165): fast mode passed to the settings the
 /// kind declares for it.
 pub const AGENT_FAST: &str = "agent-fast/1";

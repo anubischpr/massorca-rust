@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use massorca_protocol::methods::agents::KindSettingsSetParams;
 use massorca_protocol::methods::hosted_services::ServiceConnect;
 use massorca_protocol::methods::secrets::SecretSet;
 use serde::de::{DeserializeOwned, Error as _};
@@ -14,6 +15,10 @@ use serde_json::Value;
 pub(crate) enum Kind {
     String,
     Bool,
+    /// An array of strings.
+    Strings,
+    /// An object whose values are strings.
+    StringMap,
 }
 
 impl Kind {
@@ -21,6 +26,12 @@ impl Kind {
         match self {
             Self::String => value.is_string(),
             Self::Bool => value.is_boolean(),
+            Self::Strings => value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string)),
+            Self::StringMap => value
+                .as_object()
+                .is_some_and(|map| map.values().all(Value::is_string)),
         }
     }
 
@@ -28,6 +39,8 @@ impl Kind {
         match self {
             Self::String => "a string",
             Self::Bool => "a boolean",
+            Self::Strings => "an array of strings",
+            Self::StringMap => "an object of strings",
         }
     }
 }
@@ -52,6 +65,16 @@ impl SecretParams for ServiceConnect {
         ("token", Kind::String, true),
         ("base_url", Kind::String, false),
         ("email", Kind::String, false),
+    ];
+}
+
+impl SecretParams for KindSettingsSetParams {
+    const FIELDS: &'static [(&'static str, Kind, bool)] = &[
+        ("kind", Kind::String, true),
+        ("program", Kind::String, false),
+        ("args", Kind::Strings, false),
+        ("env", Kind::StringMap, false),
+        ("remove_env", Kind::Strings, false),
     ];
 }
 
@@ -133,6 +156,39 @@ mod tests {
             assert_eq!(message_seen, message);
             assert!(!message_seen.contains(VALUE) && !message_seen.contains("7315920"));
         }
+    }
+
+    #[test]
+    fn kind_settings_with_a_wrong_typed_value_never_repeat_it() {
+        use massorca_protocol::methods::agents::KindSettingsSetParams;
+        for (params, message) in [
+            (
+                json!({ "kind": "claude", "env": { "TOKEN": 7_315_920 } }),
+                "invalid type for field `env`: expected an object of strings",
+            ),
+            (
+                json!({ "kind": "claude", "env": [VALUE] }),
+                "invalid type for field `env`: expected an object of strings",
+            ),
+            (
+                json!({ "kind": "claude", "args": [VALUE, 1] }),
+                "invalid type for field `args`: expected an array of strings",
+            ),
+            (
+                json!({ "kind": "claude", "remove_env": VALUE }),
+                "invalid type for field `remove_env`: expected an array of strings",
+            ),
+        ] {
+            let seen = decode::<KindSettingsSetParams>(params)
+                .map(|_| ())
+                .unwrap_err()
+                .0;
+            assert_eq!(seen, message);
+            assert!(!seen.contains(VALUE) && !seen.contains("7315920"));
+        }
+        let set: KindSettingsSetParams =
+            decode(json!({ "kind": "claude", "env": { "TOKEN": VALUE } })).expect("decodes");
+        assert_eq!(set.env["TOKEN"], VALUE);
     }
 
     #[test]

@@ -14,7 +14,8 @@ use massorca_protocol::methods::agents::{
     AgentStopParams, AgentTree, AgentWatchParams, BringBackResult, CredentialsImportParams,
     CredentialsImported, CredentialsKindRef, CredentialsRemoved, CredentialsShown,
     GenerateTitleParams, GenerateTitleResult, ImportCandidates, ImportCandidatesParams,
-    PromptReceipt, QueuedPrompt,
+    KindSettings, KindSettingsCleared, KindSettingsRef, KindSettingsSetParams, PromptReceipt,
+    QueuedPrompt,
 };
 use massorca_protocol::methods::chat;
 use massorca_protocol::methods::commands::{self, CommandTable};
@@ -53,6 +54,15 @@ fn require_offered(offered: bool, capability: &str, what: &str) -> Result<(), Cl
             capability: capability.to_owned(),
         })
     }
+}
+
+/// Refuses a settings call to a service that does not offer `agent-settings/1` (decision 0174).
+fn require_settings(client: &Client) -> Result<(), ClientError> {
+    require_offered(
+        client.has_capability(capabilities::AGENT_SETTINGS),
+        capabilities::AGENT_SETTINGS,
+        "an agent kind's launch settings",
+    )
 }
 
 impl Client {
@@ -715,6 +725,37 @@ impl Client {
         kind: &str,
     ) -> Result<CredentialsRemoved, ClientError> {
         self.call(agents::CREDENTIALS_REMOVE, &kind_ref(kind)).await
+    }
+
+    /// `agent.settings.get`: a kind's standing launch settings, with variable names only (capability
+    /// `agent-settings/1`, decision 0174). A service that does not offer it is refused before anything is sent.
+    pub async fn agent_settings_get(&self, kind: &str) -> Result<KindSettings, ClientError> {
+        require_settings(self)?;
+        let params = KindSettingsRef {
+            kind: kind.to_owned(),
+        };
+        self.call(agents::SETTINGS_GET, &params).await
+    }
+
+    /// `agent.settings.set`: changes a kind's standing launch settings (capability `agent-settings/1`, decision 0174).
+    pub async fn agent_settings_set(
+        &self,
+        params: &KindSettingsSetParams,
+    ) -> Result<KindSettings, ClientError> {
+        require_settings(self)?;
+        self.call(agents::SETTINGS_SET, params).await
+    }
+
+    /// `agent.settings.clear`: removes a kind's standing launch settings (capability `agent-settings/1`, decision 0174).
+    pub async fn agent_settings_clear(
+        &self,
+        kind: &str,
+    ) -> Result<KindSettingsCleared, ClientError> {
+        require_settings(self)?;
+        let params = KindSettingsRef {
+            kind: kind.to_owned(),
+        };
+        self.call(agents::SETTINGS_CLEAR, &params).await
     }
 
     /// `agent.accounts.list`: the kind's accounts, oldest first.

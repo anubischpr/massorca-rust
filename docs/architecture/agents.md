@@ -317,6 +317,9 @@ Capability `agents/1`, and `agent-modes/1` for permission modes (decision 0083).
 | `agent.credentials.import` | workspace | `kind`, `from`, `replace?` | `{ kind, home, files: [{ name, bytes }] }` |
 | `agent.credentials.show` | read | `kind` | `{ kind, home, exists, files: [{ name, present, bytes?, modified_at_ms? }] }` |
 | `agent.credentials.remove` | workspace | `kind` | `{ kind, removed }` |
+| `agent.settings.get` | host-admin | `kind` | `{ kind, program?, args?, env_names? }`: the kind's standing launch settings, variable names only (capability `agent-settings/1`, decision 0174) |
+| `agent.settings.set` | host-admin | `kind`, `program?` (empty removes it), `args?` (replaces; empty removes), `env?` (sets these), `remove_env?` | as `agent.settings.get` (capability `agent-settings/1`, decision 0174) |
+| `agent.settings.clear` | host-admin | `kind` | `{ kind, removed }` (capability `agent-settings/1`, decision 0174) |
 | `agent.accounts.list` | read | `kind` | `{ accounts: [{ id, label, state, identity?, active, projects, origin }] }` |
 | `agent.accounts.add` | workspace | `kind`, `label?` | `{ account, terminal_id }`: starts the sign-in |
 | `agent.accounts.sign_in` | workspace | `kind`, `account` | `{ account, terminal_id }`: starts a sign-in again to an existing account |
@@ -426,12 +429,25 @@ resume, list and the rest of the session commands work as for any session.
 The folder is created when the first session starts in it. A start that fails after its folder
 was made keeps the folder, the same as a failed delegated start keeps its child workspace.
 
+## Standing launch settings (decision 0174)
+
+`agent.settings.*` (capability `agent-settings/1`, host-admin) keep, per kind, a `program` that replaces the declared
+ones, `args` added after the kind's own (and its mode and model flags) and before a start's own `args`, and `env` set
+under a start's own `env`. They are one sealed row of the profile's vault per kind, so a locked vault refuses a start of
+a kind that has settings with `agent.secrets_unavailable`. The program applies wherever the service runs the kind
+(starts, resumes, forks, children, sign-in, account checks, one-shot runs); the arguments and variables to every
+terminal and chat run, resumes included. A reader gets the variable names only. The variables follow the vault's
+boundary (amendment A1): only a run whose caller is host-admin gets them, and such a run is marked `holds_secrets`; any
+other caller's run gets its own `env` only. A name the vault refuses for a secret (`is_dangerous_env_name`) is refused
+when it is set. Standing arguments leave a started or resumed mode unconfirmed.
+
 ## Run environment
 
 On top of the terminal environment (0032): `MASSORCA_BIN`, the kind's
 home variable when the profile has a home for it (0056), minus the kind's
 `strip_env` in that case, then the profile vault's secrets for the workspace's
-project (0071), then the caller's `env`, then the run's own identity,
+project (0071), then the kind's standing `env` (decision 0174, host-admin callers only) with the caller's `env` over it,
+then the run's own identity,
 `MASSORCA_AGENT_SESSION`, `MASSORCA_AGENT_TOKEN` and `MASSORCA_AGENT_KIND`, which
 the caller cannot override. The kind's `strip_inherited_env` names are stripped
 from every run, unless the launch sets them (decision 0160). `PATH` starts with the
@@ -949,6 +965,9 @@ massorca agent bring-back <child> [--no-merge] [--no-prompt]
 massorca agent credentials import <kind> --from <dir> [--replace]
 massorca agent credentials show <kind>
 massorca agent credentials remove <kind>
+massorca agent settings show <kind>
+massorca agent settings set <kind> [--program <path>] [--arg <a>]... [--env K=V]... [--secret-env K] [--unset-env K]...
+massorca agent settings clear <kind>
 massorca agent accounts list <kind>
 massorca agent accounts add <kind> [--label <l>] [--no-attach]
 massorca agent accounts sign-in <kind> <account> [--no-attach]

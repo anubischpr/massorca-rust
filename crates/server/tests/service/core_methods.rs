@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use massorca_protocol::methods::config::ConfigList;
 use massorca_protocol::methods::skill_placement as placement;
 use massorca_protocol::methods::{
-    config, events, extension_points, extensions, hosted_services, projects, service, skills,
-    workspaces,
+    agents, config, events, extension_points, extensions, hosted_services, projects, service,
+    skills, workspaces,
 };
 use massorca_protocol::{ErrorBody, PROTOCOL_VERSION, capabilities, codes};
 use massorca_server::{
@@ -76,6 +76,9 @@ const AGENT_METHODS: &[&str] = &[
     "agent.credentials.import",
     "agent.credentials.show",
     "agent.credentials.remove",
+    "agent.settings.get",
+    "agent.settings.set",
+    "agent.settings.clear",
 ];
 
 /// The Bot Teams methods this build registers (capability `teams/1`).
@@ -147,6 +150,22 @@ const OWN_CAPABILITY_METHODS: &[(&str, &str, Permission)] = &[
         extension_points::POINTS,
         capabilities::EXTENSION_POINTS,
         Permission::Read,
+    ),
+    // A kind's standing launch settings choose what every run of it executes (decision 0174).
+    (
+        agents::SETTINGS_GET,
+        capabilities::AGENT_SETTINGS,
+        Permission::HostAdmin,
+    ),
+    (
+        agents::SETTINGS_SET,
+        capabilities::AGENT_SETTINGS,
+        Permission::HostAdmin,
+    ),
+    (
+        agents::SETTINGS_CLEAR,
+        capabilities::AGENT_SETTINGS,
+        Permission::HostAdmin,
     ),
 ];
 

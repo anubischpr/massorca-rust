@@ -2,6 +2,7 @@
 
 mod agent_chat;
 mod agent_redaction;
+pub(crate) mod agent_settings;
 mod agents;
 mod automations;
 mod calendar;
@@ -80,6 +81,7 @@ pub(crate) fn register_core(
     handles.extend(terminal_attach::register(registries)?);
     handles.extend(agents::register(registries)?);
     handles.extend(agent_chat::register(registries)?);
+    handles.extend(agent_settings::register(registries)?);
     handles.extend(extensions::register(registries)?);
     handles.extend(extension_points::register(registries)?);
     handles.extend(skills::register(registries)?);

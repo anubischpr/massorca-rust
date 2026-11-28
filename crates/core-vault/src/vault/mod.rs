@@ -16,6 +16,7 @@ use crate::key::{KeyError, LockReason, MasterKey, Protection};
 use crate::names::{Scope, is_valid_name};
 use crate::value::SecretValue;
 
+mod agent_kinds;
 mod case_clash;
 mod environment;
 mod keys;
@@ -29,8 +30,15 @@ pub use requests::{
 
 pub use services::{ServiceConnection, ServiceField, StoredService};
 
+use agent_kinds::is_agent_kind_scope;
 use keys::{Recorded, recorded};
 use services::is_service_scope;
+
+/// Whether a row is one the vault keeps for the service itself (a service connection or an agent kind's settings), which
+/// no secret method lists, counts or hands to a run.
+fn is_internal_scope(scope: &str) -> bool {
+    is_service_scope(scope) || is_agent_kind_scope(scope)
+}
 
 /// Why a vault call was refused. Messages name scopes and names only, never a value.
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +83,8 @@ pub enum VaultError {
     InvalidService,
     #[error("the service {0} must be plain text without control characters")]
     InvalidServiceField(ServiceField),
+    #[error("invalid agent kind; use 1 to 32 lowercase letters, digits and dashes")]
+    InvalidAgentKind,
     #[error("the value is longer than 64 KiB")]
     TooLarge,
     #[error("the reason must be plain text of at most 200 characters")]
@@ -91,6 +101,12 @@ pub enum VaultError {
     /// `count` is every sealed row; `services` of them are service connections.
     #[error("{}", not_empty(*.count, *.services))]
     VaultNotEmpty { count: u64, services: u64 },
+    /// Agent kinds whose launch settings (decision 0174) the key seals.
+    #[error(
+        "the vault holds the launch settings of agent kind {}; clear them with `massorca agent settings clear <kind>` before resetting its key",
+        .kinds.join(", ")
+    )]
+    AgentSettingsStored { kinds: Vec<String> },
     #[error("too many secret requests: {0}")]
     RequestLimit(&'static str),
     #[error("{name} in {scope} could not be opened; set it again with replace")]
@@ -198,7 +214,7 @@ impl Vault {
         let secrets = self.store.list_secrets()?;
         let count = secrets
             .iter()
-            .filter(|secret| !is_service_scope(&secret.scope))
+            .filter(|secret| !is_internal_scope(&secret.scope))
             .count();
         let count = u64::try_from(count).unwrap_or(u64::MAX);
         let any_rows = !secrets.is_empty();
@@ -225,7 +241,7 @@ impl Vault {
     /// A store failure.
     pub fn list(&self, scope: Option<&Scope>) -> Result<Vec<VaultEntry>, VaultError> {
         let mut secrets = self.store.list_secrets()?;
-        secrets.retain(|secret| !is_service_scope(&secret.scope));
+        secrets.retain(|secret| !is_internal_scope(&secret.scope));
         let links = self.store.list_secret_links()?;
         let by_id: BTreeMap<&str, &SecretMeta> =
             secrets.iter().map(|s| (s.id.as_str(), s)).collect();

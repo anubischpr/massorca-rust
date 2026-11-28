@@ -8,6 +8,7 @@ use std::sync::MutexGuard;
 
 use massorca_core_store::{SecretKeyCheck, now_ms};
 
+use super::agent_kinds::{agent_kind_row_aad, is_agent_kind_scope, kind_of};
 use super::services::{is_service_scope, service_row_aad};
 use super::{ScopedName, Vault, VaultError};
 use crate::cipher::{self, Aad};
@@ -58,7 +59,12 @@ impl Vault {
     /// `VaultNotEmpty` while any secret exists; a key or store failure.
     pub fn reset_key(&self) -> Result<(), VaultError> {
         let mut guard = self.lock();
-        let rows = self.store.list_secrets()?;
+        let mut rows = self.store.list_secrets()?;
+        let kinds: Vec<String> = rows
+            .iter()
+            .filter_map(|row| kind_of(&row.scope).map(str::to_owned))
+            .collect();
+        rows.retain(|row| !is_agent_kind_scope(&row.scope));
         if !rows.is_empty() {
             let services = rows
                 .iter()
@@ -68,6 +74,9 @@ impl Vault {
                 count: u64::try_from(rows.len()).unwrap_or(u64::MAX),
                 services: u64::try_from(services).unwrap_or(u64::MAX),
             });
+        }
+        if !kinds.is_empty() {
+            return Err(VaultError::AgentSettingsStored { kinds });
         }
         *guard = None;
         KeyStore::reset(&self.dir).map_err(VaultError::Key)?;
@@ -125,6 +134,8 @@ impl Vault {
             let opens = self.store.secret_by_id(&meta.id)?.is_some_and(|row| {
                 let aad = if is_service_scope(&row.scope) {
                     service_row_aad(&row)
+                } else if is_agent_kind_scope(&row.scope) {
+                    agent_kind_row_aad(&row)
                 } else {
                     row.scope
                         .parse::<Scope>()

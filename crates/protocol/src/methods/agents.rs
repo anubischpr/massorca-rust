@@ -77,6 +77,13 @@ pub const CREDENTIALS_IMPORT: &str = "agent.credentials.import";
 pub const CREDENTIALS_SHOW: &str = "agent.credentials.show";
 /// Params: [`CredentialsKindRef`]. Result: [`CredentialsRemoved`].
 pub const CREDENTIALS_REMOVE: &str = "agent.credentials.remove";
+/// Params: [`KindSettingsRef`]. Result: [`KindSettings`]. A kind's standing launch settings (decision 0174, capability
+/// `agent-settings/1`): the program, arguments and environment names every run of the kind starts with.
+pub const SETTINGS_GET: &str = "agent.settings.get";
+/// Params: [`KindSettingsSetParams`]. Result: [`KindSettings`]. Changes a kind's standing launch settings (decision 0174).
+pub const SETTINGS_SET: &str = "agent.settings.set";
+/// Params: [`KindSettingsRef`]. Result: [`KindSettingsCleared`]. Removes a kind's standing launch settings (decision 0174).
+pub const SETTINGS_CLEAR: &str = "agent.settings.clear";
 
 pub const ACCOUNTS_LIST: &str = "agent.accounts.list";
 pub const ACCOUNTS_ADD: &str = "agent.accounts.add";
@@ -494,8 +501,8 @@ pub struct AgentKinds {
     pub kinds: Vec<AgentKind>,
 }
 
-/// Params of `agent.start`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Params of `agent.start`. `Debug` never shows an `env` value, which may be a secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStartParams {
     /// Workspace id, name or path. Absent starts a session with no project (capability `agent-no-project/1`, decision
     /// 0094): it runs in the conversations folder, in a folder of its own.
@@ -905,6 +912,82 @@ pub struct CredentialsShown {
 /// Result of `agent.credentials.remove`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialsRemoved {
+    pub kind: String,
+    pub removed: bool,
+}
+
+/// Params of `agent.settings.get` and `agent.settings.clear` (decision 0174).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindSettingsRef {
+    pub kind: String,
+}
+
+/// Params of `agent.settings.set` (decision 0174). What is left out keeps its stored value. `program` replaces the stored
+/// program, and an empty one removes it; `args` replaces the stored arguments, and an empty list removes them; `env` sets
+/// or replaces those variables, and `remove_env` removes the names it lists. `Debug` never shows an `env` value.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindSettingsSetParams {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_env: Vec<String>,
+}
+
+impl std::fmt::Debug for AgentStartParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentStartParams")
+            .field("workspace", &self.workspace)
+            .field("kind", &self.kind)
+            .field("prompt", &self.prompt)
+            .field("args", &self.args)
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .field("read_only", &self.read_only)
+            .field("title", &self.title)
+            .field("cols", &self.cols)
+            .field("rows", &self.rows)
+            .field("request_id", &self.request_id)
+            .field("permission_mode", &self.permission_mode)
+            .field("model", &self.model)
+            .field("effort", &self.effort)
+            .field("fast", &self.fast)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for KindSettingsSetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KindSettingsSetParams")
+            .field("kind", &self.kind)
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .field("remove_env", &self.remove_env)
+            .finish()
+    }
+}
+
+/// A kind's standing launch settings (decision 0174): the program that replaces the declared ones, the arguments added
+/// after the kind's own and before a start's, and the names of the variables set in every run. Values never leave the
+/// service.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindSettings {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_names: Vec<String>,
+}
+
+/// Result of `agent.settings.clear`: whether the kind had settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindSettingsCleared {
     pub kind: String,
     pub removed: bool,
 }
