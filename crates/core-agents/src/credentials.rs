@@ -2501,4 +2501,195 @@ mod tests {
         }
         assert!(!paths::agents_dir(profile).join("accounts").exists());
     }
+
+    // The read behind `Agents::with_account_credential` (decision 0176): the same refusals as showing an account.
+
+    fn read_credential(fixture: &Fixture, account: &str) -> Result<Vec<u8>, AgentError> {
+        read_account_credential(fixture.profile.path(), &BuiltInPackages, "fake", account)
+            .map(|bytes| bytes.to_vec())
+    }
+
+    /// A fixture with kind `fake` declaring `token.json` (required) and `extra.json` (optional), and `ACCOUNT` imported.
+    fn credential_fixture() -> Fixture {
+        let fixture = Fixture::new(&["token.json"]);
+        fixture.declare(json!({
+            "home_env": "FAKE_AGENT_HOME",
+            "files": ["extra.json", "token.json"],
+            "optional": ["extra.json"]
+        }));
+        fixture.source_file("token.json", FAKE_TOKEN.as_bytes());
+        fixture.source_file("extra.json", b"{}");
+        import_account(
+            fixture.profile.path(),
+            "fake",
+            ACCOUNT,
+            fixture.source.path(),
+        )
+        .unwrap();
+        fixture
+    }
+
+    #[test]
+    fn the_credential_read_returns_the_first_required_file() {
+        let fixture = credential_fixture();
+        assert_eq!(
+            read_credential(&fixture, ACCOUNT).unwrap(),
+            FAKE_TOKEN.as_bytes()
+        );
+    }
+
+    #[test]
+    fn the_credential_read_refuses_a_missing_home_file_or_directory_in_its_place() {
+        let fixture = credential_fixture();
+        let error = read_credential(&fixture, OTHER_ACCOUNT).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        let token = account_home(&fixture, ACCOUNT).join("token.json");
+        fs::remove_file(&token).unwrap();
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(error.message.contains("missing"), "{}", error.message);
+        fs::create_dir(&token).unwrap();
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert!(error.message.contains("a directory"), "{}", error.message);
+    }
+
+    #[test]
+    fn the_credential_read_refuses_a_file_over_the_cap() {
+        let fixture = credential_fixture();
+        let token = account_home(&fixture, ACCOUNT).join("token.json");
+        fs::write(
+            &token,
+            vec![b'x'; usize::try_from(MAX_FILE_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(!error.message.contains("xxx"), "{}", error.message);
+    }
+
+    #[test]
+    fn the_credential_read_refuses_a_linked_agents_accounts_or_kind_directory() {
+        for linked in ["agents", "accounts", "kind"] {
+            let fixture = credential_fixture();
+            let agents = paths::agents_dir(fixture.profile.path());
+            let real = match linked {
+                "agents" => agents.clone(),
+                "accounts" => agents.join("accounts"),
+                _ => agents.join("accounts").join("fake"),
+            };
+            // Move the real tree into the link target, so a followed link would find the token.
+            let elsewhere = tempfile::tempdir().unwrap();
+            let target = elsewhere.path().join("moved");
+            fs::rename(&real, &target).unwrap();
+            link_dir(&target, &real);
+            let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+            // A linked `agents` also hides the profile's kinds, which may refuse the kind before its home is reached.
+            let refused = error.code == codes::AGENT_CREDENTIALS_INVALID
+                || (linked == "agents" && error.code == codes::AGENT_KIND_NOT_FOUND);
+            assert!(refused, "{linked}: {} {}", error.code, error.message);
+            assert!(!error.message.contains("\"fake\""), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn the_credential_read_refuses_a_linked_account_home() {
+        let fixture = credential_fixture();
+        let home = account_home(&fixture, ACCOUNT);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("home");
+        fs::rename(&home, &target).unwrap();
+        link_dir(&target, &home);
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(
+            error.code,
+            codes::AGENT_CREDENTIALS_INVALID,
+            "{}",
+            error.message
+        );
+        assert!(
+            target.join("token.json").exists(),
+            "the link target is untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_credential_read_never_follows_a_linked_credential_file() {
+        use std::os::unix::fs::symlink;
+        let fixture = credential_fixture();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
+        let token = account_home(&fixture, ACCOUNT).join("token.json");
+        fs::remove_file(&token).unwrap();
+        symlink(elsewhere.path().join("real.json"), &token).unwrap();
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(error.message.contains("a link"), "{}", error.message);
+    }
+
+    /// A file symlink needs Developer Mode or a privilege on Windows; without it the test says so and passes.
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::print_stderr,
+        reason = "a skipped test must name why it skipped"
+    )]
+    fn the_credential_read_never_follows_a_linked_credential_file_when_one_can_be_made() {
+        let fixture = credential_fixture();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("real.json"), FAKE_TOKEN).unwrap();
+        let token = account_home(&fixture, ACCOUNT).join("token.json");
+        fs::remove_file(&token).unwrap();
+        if let Err(error) =
+            std::os::windows::fs::symlink_file(elsewhere.path().join("real.json"), &token)
+        {
+            eprintln!("skipped: symbolic links cannot be made here ({error})");
+            return;
+        }
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID);
+        assert!(error.message.contains("a link"), "{}", error.message);
+    }
+
+    #[test]
+    fn the_credential_read_refuses_an_escaping_account_or_file_name() {
+        let fixture = credential_fixture();
+        for bad in ["../escape", "..", ".hidden", "not-a-uuid"] {
+            let error = read_credential(&fixture, bad).unwrap_err();
+            assert_eq!(error.code, codes::AGENT_CREDENTIALS_INVALID, "{bad}");
+        }
+        // A declaration naming a path instead of a file name makes the kind invalid, so nothing is read.
+        fs::write(
+            paths::agents_dir(fixture.profile.path())
+                .join("accounts")
+                .join("token.json"),
+            FAKE_TOKEN,
+        )
+        .unwrap();
+        fixture.declare(json!({ "home_env": "FAKE_AGENT_HOME", "files": ["../token.json"] }));
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(
+            error.code,
+            codes::AGENT_CREDENTIALS_UNSUPPORTED,
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn the_credential_read_refuses_a_kind_without_credentials_or_unknown() {
+        let fixture = credential_fixture();
+        fixture.declare(json!(null));
+        let error = read_credential(&fixture, ACCOUNT).unwrap_err();
+        assert_eq!(
+            error.code,
+            codes::AGENT_CREDENTIALS_UNSUPPORTED,
+            "{}",
+            error.message
+        );
+        let error =
+            read_account_credential(fixture.profile.path(), &BuiltInPackages, "nope", ACCOUNT)
+                .unwrap_err();
+        assert_eq!(error.code, codes::AGENT_KIND_NOT_FOUND);
+    }
 }
